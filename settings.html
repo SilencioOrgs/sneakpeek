@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'">
+<title>SneakPeek Settings</title>
+<style>
+  @font-face { font-family: "Inter"; font-weight: 100 900; font-display: block;
+    src: url("node_modules/@fontsource-variable/inter/files/inter-latin-wght-normal.woff2") format("woff2"); }
+  :root {
+    --ink: #0a0a0a; --text: #f4f1ec; --muted: rgba(244, 241, 236, .52);
+    --line: rgba(255, 255, 255, .08);  /* dividers (decorative) */
+    --edge: #67645f;                   /* control outlines: 3.5:1 on --ink */
+    --track: rgba(255, 255, 255, .14); --knob-off: #8f8c87; --field: rgba(255, 255, 255, .05);
+    --accent: #a99bff; --warn: #ffc65a; --hot: #ff6b6b;
+    --hot-bg: rgba(255, 107, 107, .1); --hot-bg-hover: rgba(255, 107, 107, .18); --hot-edge: rgba(255, 107, 107, .35);
+  }
+  html, body { margin: 0; background: var(--ink); color: var(--text); font: 13px/1.45 "Inter", "Segoe UI", sans-serif; font-feature-settings: "cv11", "ss01"; }
+  ::selection { background: rgba(169, 155, 255, .35); color: var(--text); }
+  ::-webkit-scrollbar { width: 10px; }
+  ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, .14); border-radius: 99px; border: 3px solid var(--ink); }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, .24); }
+  main { max-width: 520px; margin: 0 auto; padding: 22px 24px 28px; }
+  header { display: flex; align-items: center; gap: 12px; margin-bottom: 22px; }
+  header img { width: 40px; height: 40px; }
+  header h1 { margin: 0; font-size: 18px; font-weight: 650; letter-spacing: .01em; }
+  header small { color: var(--muted); font-size: 12px; }
+
+  h2 { margin: 28px 0 6px; font-size: 11px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+  .row { display: flex; align-items: center; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+  .row:last-of-type { border-bottom: 0; }
+  .row .txt { flex: 1; min-width: 0; }
+  .row .name { font-weight: 550; }
+  .row .desc { color: var(--muted); font-size: 12px; margin-top: 1px; }
+  .row .desc.warn, .note.warn { color: var(--warn); }
+  .note { color: var(--muted); font-size: 12px; margin: 8px 0 0; }
+
+  /* Problems: a banner under the header, and a hint under the alert levels */
+  .banner { display: flex; gap: 12px; align-items: flex-start; margin: 0 0 6px; padding: 10px 12px; border-radius: 10px;
+    background: var(--hot-bg); border: 1px solid var(--hot-edge); }
+  .banner p { flex: 1; margin: 0; }
+  .banner button { all: unset; cursor: pointer; flex: none; color: var(--muted); font-size: 12px; font-weight: 600; padding: 0 2px; }
+  .banner button:hover { color: var(--text); }
+
+  /* Switch: an outlined track so it's visible when off, a knob that slides */
+  .sw { position: relative; width: 36px; height: 20px; flex: none; }
+  .sw input { appearance: none; margin: 0; width: 100%; height: 100%; border-radius: 99px; background: var(--track); cursor: pointer;
+    box-shadow: inset 0 0 0 1.5px var(--edge); transition: background .2s, box-shadow .2s; }
+  .sw input:checked { background: var(--text); box-shadow: none; }
+  .sw input:disabled { cursor: not-allowed; opacity: .4; }
+  .sw::after { content: ""; position: absolute; top: 4px; left: 4px; width: 12px; height: 12px; border-radius: 50%; background: var(--knob-off);
+    pointer-events: none; transition: transform .25s cubic-bezier(.3, 1.4, .5, 1), background .2s; }
+  .sw:has(input:checked)::after { transform: translateX(16px); background: var(--ink); }
+
+  /* Numbers and sliders */
+  .num { width: 54px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--edge); background: var(--field); color: var(--text);
+    font: inherit; text-align: right; caret-color: var(--accent); }
+  .num:hover { border-color: var(--knob-off); }
+  .levels { display: flex; gap: 6px; align-items: center; color: var(--muted); }
+  .slider { display: flex; align-items: center; gap: 10px; width: 190px; flex: none; }
+  .slider output { width: 52px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+  input[type=range] { flex: 1; accent-color: var(--text); cursor: pointer; }
+
+  button.danger { all: unset; cursor: pointer; padding: 8px 14px; border-radius: 10px; font-weight: 600; font-size: 12px; color: var(--hot); background: var(--hot-bg); }
+  button.danger:hover { background: var(--hot-bg-hover); }
+  footer { margin-top: 26px; color: var(--muted); font-size: 11.5px; }
+  code { font: 11.5px "Cascadia Mono", Consolas, monospace; }
+
+  /* Focus last, so no component rule (like all: unset) can remove it */
+  input:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .sw input, .sw::after { transition: none; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <img src="assets/sneakpeek.svg" alt="">
+    <div><h1>SneakPeek</h1><small id="version"></small></div>
+  </header>
+  <div class="banner" id="error" role="alert" hidden><p id="error-text"></p><button id="error-close">Dismiss</button></div>
+
+  <h2>AI tools</h2>
+  <div class="row"><div class="txt"><div class="name">Claude Code</div><div class="desc">Usage, logo and alerts for Claude</div></div><label class="sw"><input type="checkbox" data-set="claude"></label></div>
+  <div class="row"><div class="txt"><div class="name">ChatGPT · Codex</div><div class="desc">Usage, logo and alerts for ChatGPT / Codex</div></div><label class="sw"><input type="checkbox" data-set="codex"></label></div>
+
+  <h2>Music</h2>
+  <div class="row"><div class="txt"><div class="name">Now playing</div><div class="desc">Song, cover art and controls for Spotify, YouTube, Apple Music and other players</div></div><label class="sw"><input type="checkbox" data-set="music"></label></div>
+  <div class="row"><div class="txt"><div class="name">Song change notes</div><div class="desc">A small note beside the tab when the song changes</div></div><label class="sw"><input type="checkbox" data-set="songNotes"></label></div>
+
+  <h2>Claude Code integration</h2>
+  <div class="row"><div class="txt"><div class="name">Live usage</div><div class="desc" id="feed-desc">Updates SneakPeek after every reply, and shows usage in the terminal status line</div></div><label class="sw"><input type="checkbox" data-int="claude.feed"></label></div>
+  <div class="row"><div class="txt"><div class="name">Working animation</div><div class="desc">Spinner while Claude works, and the "done" note</div></div><label class="sw"><input type="checkbox" data-int="claude.activity"></label></div>
+  <div class="row"><div class="txt"><div class="name">Approvals and questions</div><div class="desc">Answer Claude's permission prompts and questions in SneakPeek</div></div><label class="sw"><input type="checkbox" data-int="claude.ask"></label></div>
+  <p class="note" id="claude-note" hidden></p>
+
+  <h2>Codex integration</h2>
+  <div class="row"><div class="txt"><div class="name">Working animation</div><div class="desc">Shimmer while Codex works, and the "done" note</div></div><label class="sw"><input type="checkbox" data-int="codex.activity"></label></div>
+  <div class="row"><div class="txt"><div class="name">Approvals</div><div class="desc">Answer Codex's permission prompts in SneakPeek</div></div><label class="sw"><input type="checkbox" data-int="codex.ask"></label></div>
+  <p class="note" id="codex-note" hidden></p>
+  <p class="note">After a change, Codex asks you to approve it in <code>/hooks</code>. Restart the Codex desktop app to pick it up.</p>
+
+  <h2>Notifications</h2>
+  <div class="row"><div class="txt"><div class="name">Sounds</div><div class="desc">Chimes for approvals, "done" notes and alerts</div></div><label class="sw"><input type="checkbox" data-set="sounds"></label></div>
+  <div class="row"><div class="txt"><div class="name">"Done" notes</div><div class="desc">When work took at least this many seconds</div></div>
+    <input class="num" type="number" min="0" max="600" step="1" id="doneMinSec" aria-label="Minimum seconds for a done note"><label class="sw"><input type="checkbox" data-set="doneNotes"></label></div>
+  <div class="row"><div class="txt"><div class="name">Usage alerts</div><div class="desc">When a limit passes these levels</div></div>
+    <div class="levels"><input class="num" type="number" min="1" max="99" step="1" id="lvl1" aria-label="First alert level, percent">%<input class="num" type="number" min="1" max="99" step="1" id="lvl2" aria-label="Second alert level, percent">%</div>
+    <label class="sw"><input type="checkbox" data-set="alerts"></label></div>
+  <p class="note" id="levels-msg" role="status" hidden></p>
+
+  <h2>Widget</h2>
+  <div class="row"><div class="txt"><div class="name">Size</div></div><div class="slider"><input type="range" min="50" max="125" step="5" id="scale" aria-label="Widget size"><output id="scale-out"></output></div></div>
+  <div class="row"><div class="txt"><div class="name">Position</div><div class="desc">Where it sits on the right edge</div></div><div class="slider"><input type="range" min="0" max="100" step="1" id="offset" aria-label="Widget position"><output id="offset-out"></output></div></div>
+
+  <h2>General</h2>
+  <div class="row"><div class="txt"><div class="name">Start with Windows</div></div><label class="sw"><input type="checkbox" id="startup"></label></div>
+  <div class="row"><div class="txt"><div class="name">Remove all integrations</div><div class="desc">Takes SneakPeek's hooks and status line out of Claude Code and Codex</div></div><button class="danger" id="remove-all">Remove</button></div>
+
+  <footer>Saved to <code>~/.sneakpeek/settings.json</code></footer>
+</main>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const NAMES = { claude: 'Claude Code', codex: 'Codex' };
+let snap;
+
+// Each switch is named by its row's title and described by its row's description, and announced as a switch.
+document.querySelectorAll('.row').forEach((row, i) => {
+  const name = row.querySelector('.name'), desc = row.querySelector('.desc');
+  name.id = 'name-' + i; if (desc) desc.id ||= 'desc-' + i;
+  row.querySelectorAll('input[type=checkbox]').forEach((input) => {
+    input.setAttribute('role', 'switch');
+    input.setAttribute('aria-labelledby', name.id);
+    if (desc) input.setAttribute('aria-describedby', desc.id);
+  });
+});
+
+function showError(msg) {
+  $('#error').hidden = !msg;
+  $('#error-text').textContent = msg || '';
+}
+$('#error-close').addEventListener('click', () => showError(null));
+
+function render(s) {
+  snap = s;
+  const { settings: c, integrations: i } = s;
+  $('#version').textContent = 'Version ' + s.version;
+  document.querySelectorAll('[data-set]').forEach((el) => { el.checked = c[el.dataset.set]; });
+  document.querySelectorAll('[data-int]').forEach((el) => { el.checked = !!i[el.dataset.int]; });
+
+  // Integrations: locked when the tool isn't installed or its config file can't be used; a note says why.
+  for (const ai of ['claude', 'codex']) {
+    const locked = !i[ai + '.installed'] || !!i[ai + '.error'];
+    document.querySelectorAll(`[data-int^="${ai}."]`).forEach((el) => { el.disabled = locked; });
+    const note = $('#' + ai + '-note');
+    note.textContent = !i[ai + '.installed'] ? `${NAMES[ai]} isn't set up on this computer, so there's nothing to connect yet.`
+      : i[ai + '.error'] ? i[ai + '.error']
+      : !c[ai] ? `${NAMES[ai]} is switched off above, so SneakPeek ignores these until you turn it back on.` : '';
+    note.classList.toggle('warn', !!i[ai + '.error']);
+    note.hidden = !note.textContent;
+  }
+  const feed = $('#feed-desc');
+  feed.classList.toggle('warn', i['claude.feed.blocked']);
+  feed.textContent = i['claude.feed.blocked'] ? 'Claude Code already has another status line, so SneakPeek leaves it alone'
+    : 'Updates SneakPeek after every reply, and shows usage in the terminal status line';
+  if (i['claude.feed.blocked']) $('[data-int="claude.feed"]').disabled = true;
+
+  $('#doneMinSec').value = c.doneMinSec;
+  [$('#lvl1').value, $('#lvl2').value] = [c.alertLevels[0] ?? '', c.alertLevels[1] ?? ''];
+  $('#scale').value = Math.round(c.scale * 100); $('#scale-out').value = Math.round(c.scale * 100) + '%';
+  $('#offset').value = c.offset; $('#offset-out').value = c.offset < 15 ? 'Top' : c.offset > 85 ? 'Bottom' : c.offset === 50 ? 'Middle' : c.offset + '%';
+  $('#startup').checked = s.startup;
+}
+
+// Every change goes through here: show the real state afterwards, and say so if it didn't happen.
+async function apply(request) {
+  try {
+    const s = await request;
+    render(s);
+    showError(s.error);
+  } catch (e) {
+    if (snap) render(snap); // put the switch back where it really is
+    showError(`That didn't save: ${e.message}`);
+  }
+}
+const set = (patch) => apply(window.sneakpeek.set(patch));
+
+document.querySelectorAll('[data-set]').forEach((el) => el.addEventListener('change', () => set({ [el.dataset.set]: el.checked })));
+document.querySelectorAll('[data-int]').forEach((el) => el.addEventListener('change', () => apply(window.sneakpeek.setIntegration(el.dataset.int, el.checked))));
+$('#doneMinSec').addEventListener('change', (e) => {
+  const n = Math.round(+e.target.value);
+  if (!Number.isFinite(n) || e.target.value === '') return render(snap);
+  set({ doneMinSec: Math.max(0, Math.min(600, n)) });
+});
+
+// Alert levels: whole numbers from 1 to 99; lower level first. Explain anything we had to change.
+function levels() {
+  const raw = [$('#lvl1').value, $('#lvl2').value].filter((v) => v !== '');
+  const ok = raw.map(Number).filter((n) => Number.isInteger(n) && n >= 1 && n <= 99);
+  const msg = $('#levels-msg');
+  if (ok.length < raw.length) msg.textContent = 'Alert levels are whole numbers from 1 to 99, so SneakPeek skipped the other one.';
+  else if (ok.length === 2 && ok[0] > ok[1]) msg.textContent = 'SneakPeek put the lower level first, so it alerts in order.';
+  else if (ok.length === 2 && ok[0] === ok[1]) msg.textContent = 'Both levels were the same, so SneakPeek kept one.';
+  else msg.textContent = '';
+  msg.hidden = !msg.textContent;
+  if (!ok.length) return render(snap); // keep the current levels rather than clearing them
+  set({ alertLevels: ok });
+}
+$('#lvl1').addEventListener('change', levels); $('#lvl2').addEventListener('change', levels);
+
+// Sliders apply live while dragging (lightly throttled); SneakPeek saves the final value.
+let t;
+const live = (patch) => { clearTimeout(t); t = setTimeout(() => set(patch), 40); };
+$('#scale').addEventListener('input', (e) => { $('#scale-out').value = e.target.value + '%'; live({ scale: e.target.value / 100 }); });
+$('#offset').addEventListener('input', (e) => live({ offset: +e.target.value }));
+$('#startup').addEventListener('change', (e) => apply(window.sneakpeek.setStartup(e.target.checked)));
+$('#remove-all').addEventListener('click', () => {
+  if (confirm('Remove all of SneakPeek\'s hooks and its status line from Claude Code and Codex?\n\nSneakPeek keeps running but stops getting live updates, animations and approvals. You can switch them back on here.'))
+    apply(window.sneakpeek.removeAll());
+});
+
+apply(window.sneakpeek.get());
+</script>
+</body>
+</html>

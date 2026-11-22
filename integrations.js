@@ -1,0 +1,102 @@
+// Turns SneakPeek's hooks and status line in Claude Code / Codex on and off.
+// SneakPeek's entries are recognised by their script path, so other hooks and settings are never touched.
+const fs = require('fs'), os = require('os'), path = require('path');
+const ROOT = path.resolve(__dirname).replace(/\\/g, '/');
+const H = os.homedir();
+const CLAUDE = path.join(H, '.claude', 'settings.json');
+const CODEX = path.join(H, '.codex', 'hooks.json');
+
+const run = (script, args) => `node "${ROOT}/${script}" ${args}`;
+const ours = (script) => (h) => typeof h?.command === 'string' && h.command.includes(`${ROOT}/${script}`);
+
+// What each switch installs: [event, hook command args, matcher?]
+const SPECS = {
+  'claude.activity': { file: CLAUDE, script: 'activity.js', hooks: [['UserPromptSubmit', 'claude start'], ['PreToolUse', 'claude start', '*'], ['Stop', 'claude stop'], ['Notification', 'claude stop'], ['SessionEnd', 'claude end']], extra: { async: true } },
+  'claude.ask': { file: CLAUDE, script: 'ask.js', hooks: [['PermissionRequest', 'claude', '*']], extra: { timeout: 90 } },
+  'codex.activity': { file: CODEX, script: 'activity.js', hooks: [['UserPromptSubmit', 'codex start'], ['PreToolUse', 'codex start'], ['Stop', 'codex stop']], extra: { timeout: 5 }, windows: true },
+  'codex.ask': { file: CODEX, script: 'ask.js', hooks: [['PermissionRequest', 'codex']], extra: { timeout: 90 }, windows: true },
+};
+
+const slash = (p) => p.replace(/\\/g, '/');
+const tilde = (f) => slash(f).replace(slash(H), '~');
+// A missing file is fine (SneakPeek creates it). A file SneakPeek can't read or parse is never written to:
+// rewriting it would replace everything in it with SneakPeek's hooks alone.
+function read(f) {
+  if (!fs.existsSync(f)) return {};
+  let text;
+  try { text = fs.readFileSync(f, 'utf8'); } catch (e) { throw new Error(`SneakPeek can't open ${tilde(f)} (${e.code || e.message}), so it left the file unchanged.`); }
+  try { const j = JSON.parse(text); if (j && typeof j === 'object' && !Array.isArray(j)) return j; } catch {}
+  throw new Error(`${tilde(f)} isn't valid JSON, so SneakPeek left it unchanged. Fix the file, then try again.`);
+}
+const peek = (f) => { try { return { cfg: read(f), error: null }; } catch (e) { return { cfg: null, error: e.message }; } };
+function write(f, obj) {
+  fs.mkdirSync(path.dirname(f), { recursive: true });
+  if (fs.existsSync(f)) fs.copyFileSync(f, f + '.bak-sneakpeek'); // last good version, kept before every change
+  fs.writeFileSync(f + '.tmp', JSON.stringify(obj, null, 2));
+  fs.renameSync(f + '.tmp', f);
+}
+
+const hasHooks = (cfg, spec) => spec.hooks.every(([ev]) => (cfg?.hooks?.[ev] || []).some((g) => (g.hooks || []).some(ours(spec.script))));
+
+function removeHooks(cfg, script) {
+  for (const [ev, groups] of Object.entries(cfg.hooks || {})) {
+    const kept = groups.map((g) => ({ ...g, hooks: (g.hooks || []).filter((h) => !ours(script)(h)) })).filter((g) => g.hooks.length);
+    if (kept.length) cfg.hooks[ev] = kept; else delete cfg.hooks[ev];
+  }
+  if (cfg.hooks && !Object.keys(cfg.hooks).length) delete cfg.hooks;
+}
+
+function addHooks(cfg, spec) {
+  removeHooks(cfg, spec.script); // never add twice
+  cfg.hooks ??= {};
+  for (const [ev, args, matcher] of spec.hooks) {
+    const cmd = run(spec.script, args);
+    const hook = { type: 'command', command: cmd, ...(spec.windows && { commandWindows: cmd }), ...spec.extra };
+    (cfg.hooks[ev] ??= []).push({ ...(matcher && { matcher }), hooks: [hook] });
+  }
+}
+
+// Claude Code's status line feeds live usage. Only ever replace our own, never someone else's.
+const feedCmd = run('statusline.js', '').trim();
+const isOurFeed = (cfg) => typeof cfg?.statusLine?.command === 'string' && cfg.statusLine.command.includes(`${ROOT}/statusline.js`);
+
+function state() {
+  const c = peek(CLAUDE), x = peek(CODEX), claude = c.cfg, codex = x.cfg;
+  return {
+    'claude.feed': isOurFeed(claude),
+    'claude.feed.blocked': !!claude?.statusLine && !isOurFeed(claude), // another status line is set
+    'claude.activity': hasHooks(claude, SPECS['claude.activity']),
+    'claude.ask': hasHooks(claude, SPECS['claude.ask']),
+    'codex.activity': hasHooks(codex, SPECS['codex.activity']),
+    'codex.ask': hasHooks(codex, SPECS['codex.ask']),
+    'claude.installed': fs.existsSync(path.dirname(CLAUDE)), 'codex.installed': fs.existsSync(path.dirname(CODEX)),
+    'claude.error': c.error, 'codex.error': x.error, // file exists but can't be used: switches stay locked
+  };
+}
+
+function set(key, on) {
+  if (key === 'claude.feed') {
+    const cfg = read(CLAUDE);
+    if (on && cfg.statusLine && !isOurFeed(cfg)) return state(); // someone else's status line: leave it alone
+    if (on) cfg.statusLine = { type: 'command', command: feedCmd };
+    else if (isOurFeed(cfg)) delete cfg.statusLine;
+    write(CLAUDE, cfg);
+    return state();
+  }
+  const spec = SPECS[key];
+  if (!spec) return state();
+  const cfg = read(spec.file);
+  if (on) addHooks(cfg, spec); else removeHooks(cfg, spec.script);
+  write(spec.file, cfg);
+  return state();
+}
+
+// Removes what it can; a file it can't touch doesn't stop the others. Reports every problem at the end.
+function removeAll() {
+  const errors = new Set();
+  for (const key of ['claude.feed', ...Object.keys(SPECS)]) try { set(key, false); } catch (e) { errors.add(e.message); }
+  if (errors.size) throw new Error([...errors].join(' '));
+  return state();
+}
+
+module.exports = { state, set, removeAll };
