@@ -28,7 +28,10 @@ function scrub(v, key = '') {
   if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, scrub(x, k)]));
   return v;
 }
-const hideToken = (cmd) => cmd.replace(/(--csrf_token[=\s]+)\S+/gi, '$1<removed>');
+// Hide every long random-looking value (tokens, ids), keeping the flag names so we can see where a token lives.
+const hideToken = (cmd) => cmd.replace(/(--csrf_token[=\s]+)\S+/gi, '$1<removed>')
+  .replace(/(--[\w-]+)([=\s]+)("?)((?!--)[^\s"]+)\3/g, (m, f, sep, q, v) => (/^[A-Za-z0-9_\-+/=.]{16,}$/.test(v) && !/[\\/]/.test(v) ? `${f}${sep}<hidden ${v.length} chars>` : m))
+  .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, '<hidden id>');
 
 // ---- 1. Find the language server ----
 const ps = (script) => execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', windowsHide: true, timeout: 20000 });
@@ -36,7 +39,7 @@ function findServers() {
   if (process.platform !== 'win32') { note('Not Windows: skipping the process search.'); return []; }
   let rows = [];
   try {
-    const out = ps("Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'language_server*' -or $_.Name -eq 'agy.exe' -or $_.Name -like 'Antigravity*' } | Select-Object ProcessId,Name,CommandLine | ConvertTo-Json -Compress");
+    const out = ps("Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'language_server*' -or $_.Name -eq 'agy.exe' -or $_.Name -like 'Antigravity*' } | Select-Object ProcessId,ParentProcessId,Name,CommandLine | ConvertTo-Json -Compress");
     rows = out.trim() ? [].concat(JSON.parse(out)) : [];
   } catch (e) { note('PowerShell process search failed: ' + e.message.split('\n')[0]); }
   const servers = [];
@@ -48,7 +51,8 @@ function findServers() {
     const token = (cmd.match(/--csrf_token[=\s]+([a-zA-Z0-9-]+)/i) || [])[1];
     const extPort = Number((cmd.match(/--(?:extension_server_port|hub-port)[=\s]+(\d+)/i) || [])[1]) || 0;
     const appData = (cmd.match(/--app_data_dir[=\s]+("?)([^"\s]+)\1/i) || [])[2] || '';
-    servers.push({ pid: r.ProcessId, name: r.Name, token, extPort, appData, antigravity: /antigravity/i.test(cmd) });
+    servers.push({ pid: r.ProcessId, name: r.Name, token, extPort, appData, antigravity: /antigravity/i.test(cmd), parent: r.ParentProcessId,
+      flags: hideToken(cmd).replace(/^("[^"]*"|\S+)\s*/, '') });
   }
   return servers;
 }
@@ -106,13 +110,19 @@ async function quota() {
   else {
     const servers = findServers();
     log(`  found ${servers.length} language server process(es)` + (servers.length ? ':' : ' (is the Antigravity IDE open?)'));
-    for (const s of servers) log(`    pid ${s.pid} ${s.name}  token: ${s.token ? 'yes' : 'NO'}  antigravity: ${s.antigravity}  ext port: ${s.extPort || '-'}  app data: ${s.appData || '-'}`);
-    targets = servers.filter((s) => s.token).map((s) => ({ ...s, ports: [...new Set([...listeningPorts(s.pid), ...(s.extPort ? [s.extPort] : [])])] }));
+    for (const s of servers) {
+      log(`    pid ${s.pid} ${s.name}  token: ${s.token ? 'yes' : 'NO'}  antigravity: ${s.antigravity}  ext port: ${s.extPort || '-'}  app data: ${s.appData || '-'}`);
+      log(`      started with (secrets hidden): ${s.flags.slice(0, 1200) || '(no arguments)'}`);
+    }
+    // No token on the command line: still try, some versions accept requests without one.
+    targets = servers.map((s) => ({ ...s, ports: [...new Set([...listeningPorts(s.pid), ...(s.extPort ? [s.extPort] : [])])] }));
   }
   for (const t of targets) {
     log(`  pid ${t.pid}: listening on ${t.ports.join(', ') || 'nothing found'}`);
     for (const port of t.ports) {
       const proto = await connect(port, t.token);
+      const tries = report.ports.filter((p) => p.port === port).map((p) => `${p.proto} ${p.status ?? p.error}`).join(', ');
+      log(`    port ${port}: ${tries}`);
       if (!proto) continue;
       log(`  connected: ${proto}://127.0.0.1:${port}`);
       const [sum, st] = await Promise.all([rpc(proto, port, t.token, 'RetrieveUserQuotaSummary', META), rpc(proto, port, t.token, 'GetUserStatus', META)]);
