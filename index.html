@@ -92,6 +92,7 @@
   #clip { position: absolute; inset: 0; pointer-events: none; } /* clipped to the blob outline every frame */
   #panel { position: absolute; left: 106px; width: 254px; opacity: 0; pointer-events: none; overflow-y: auto; scrollbar-width: none; } /* left = W - OPEN.d + 26 */
   #panel::-webkit-scrollbar { display: none; } /* too much to fit (all AIs and music on): it scrolls, nothing is cut off */
+  #panel.more { -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 40px), transparent); } /* fades out: there's more below */
   body.open #panel { pointer-events: auto; }
   header { display: flex; align-items: center; height: 26px; margin-bottom: 12px; }
   header small { color: var(--muted); font-size: 11px; }
@@ -190,7 +191,9 @@
 <script>
 const $ = (s) => document.querySelector(s);
 const body = document.body, blob = $('#blob'), icon = $('#icon');
-const W = 380, CY = 380; // fixed layout size; main.js zooms the whole page to the real window size
+// Fixed width; the height is the window's (main.js keeps it inside the screen), and the tab sits at its middle.
+const W = 380;
+let CY = Math.round(innerHeight / 2);
 
 // ---- Shape morph: each dimension is its own spring, so the blob stretches organically ----
 // d: depth from screen edge, h: half-height, c: cap corner radius, fx/fy: fillet width/height into the screen edge.
@@ -205,6 +208,7 @@ function fit() {
   panel.style.maxHeight = 2 * (CY - 40) - 40 + 'px'; // the most the open shape can hold
   OPEN.h = Math.min(CY - 40, Math.ceil((panel.offsetHeight + 40) / 2));
   OPEN.fy = Math.min(80, CY - OPEN.h - 4);
+  moreHint();
   PANEL_TOP = CY - OPEN.h + 22;
   panel.style.top = PANEL_TOP + 'px';
   kick();
@@ -258,6 +262,11 @@ function frame(t) {
   if (!moving) last = 0;
 }
 const kick = () => { if (!raf) raf = requestAnimationFrame(frame); };
+function moreHint() { const p = $('#panel'); p.classList.toggle('more', p.scrollTop + p.clientHeight < p.scrollHeight - 2); }
+$('#panel').addEventListener('scroll', moreHint);
+// The window's height changes with Settings → Size and with the screen: re-centre the tab, the note and the shape.
+function layout() { CY = Math.round(innerHeight / 2); $('#toast').style.top = CY + 'px'; fit(); }
+addEventListener('resize', layout);
 
 // ---- Open / close: hover to peek, pin to keep open ----
 let open = false, pinned = false, inside = false, timer;
@@ -294,7 +303,7 @@ window.widget.onSettings((c) => {
   body.classList.toggle('no-claude', !c.claude);
   body.classList.toggle('no-codex', !c.codex);
   body.classList.toggle('no-antigravity', !c.antigravity);
-  if (usage) render(); else fit();
+  if (usage) render(); else layout();
   renderMusic();
 });
 
@@ -536,7 +545,7 @@ let ai = 'claude';
 body.dataset.ai = ai;
 window.widget.onActivity((a) => { ai = a.ai; body.dataset.ai = ai; setWorking(a.working); paintTitle(); renderMusic(); });
 window.widget.onUsage((u) => { usage = u; render(); checkAlerts(u); });
-fit();
+layout();
 </script>
 </body>
 </html>

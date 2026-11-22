@@ -41,13 +41,15 @@ const H = Number(process.env.PANEL_H || 760);
     const p = panel.getBoundingClientRect(), last = metas[metas.length - 1]?.getBoundingClientRect();
     return { groups: [...document.querySelectorAll('#antigravity .grp')].map((g) => g.textContent), meters: metas.length,
       lastInside: !!last && last.bottom <= p.bottom + 1, scrolls: panel.scrollHeight > panel.clientHeight + 1,
-      panelInsideBlob: p.bottom <= CY + OPEN.h + 1 && p.top >= CY - OPEN.h - 1, display: getComputedStyle(document.querySelector('#antigravity')).display };
+      panelInsideBlob: p.bottom <= CY + OPEN.h + 1 && p.top >= CY - OPEN.h - 1, display: getComputedStyle(document.querySelector('#antigravity')).display,
+      more: panel.classList.contains('more') };
   });
   check(JSON.stringify(r.groups) === JSON.stringify(['Gemini Models', 'Claude and GPT models', 'Gemini 4 Argon']), 'group headings: ' + JSON.stringify(r.groups));
   check(r.meters === 5, 'meters: ' + r.meters);
   check(r.display !== 'none', 'section hidden');
   check(r.lastInside || r.scrolls, 'last Antigravity limit is cut off and the panel does not scroll');
   check(r.panelInsideBlob, 'panel spills outside the open shape');
+  check(!r.scrolls || r.more, 'panel scrolls but nothing shows there is more below');
   await page.screenshot({ path: path.join(out, 'panel-antigravity.png') });
 
   // Close the panel, then: Antigravity working.
@@ -60,6 +62,18 @@ const H = Number(process.env.PANEL_H || 760);
   check(t.mark === '1', 'Antigravity logo not shown in the tab');
   check(/^Antigravity/.test(t.title), 'tab title: ' + t.title);
   await page.screenshot({ path: path.join(out, 'tab-antigravity-working.png'), clip: { x: 260, y: H / 2 - 60, width: 120, height: 120 } });
+
+  // A shorter window (main.js keeps the window inside small screens): the tab stays centred and the panel fits.
+  await page.setViewportSize({ width: 380, height: 560 });
+  await page.waitForTimeout(300);
+  await page.evaluate(() => { togglePin(); });
+  await page.waitForTimeout(1800);
+  const s = await page.evaluate(() => { const p = document.querySelector('#panel').getBoundingClientRect();
+    return { cy: CY, toastTop: parseFloat(getComputedStyle(document.querySelector('#toast')).top), inside: p.bottom <= CY + OPEN.h + 1 && p.top >= CY - OPEN.h - 1 && p.top >= 0 && p.bottom <= innerHeight }; });
+  check(s.cy === 280, 'short window: tab not centred, CY = ' + s.cy);
+  check(s.toastTop === 280, 'short window: note not beside the tab, top = ' + s.toastTop);
+  check(s.inside, 'short window: panel spills outside the open shape or the window');
+  await page.screenshot({ path: path.join(out, 'panel-short-window.png') });
 
   await browser.close();
   if (fail.length) { console.error('FAIL:\n  ' + fail.join('\n  ')); process.exit(1); }

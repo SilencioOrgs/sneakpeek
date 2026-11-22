@@ -24,7 +24,8 @@ const antigravity = require('./antigravity');
 const firstRun = !fs.existsSync(path.join(os.homedir(), '.sneakpeek', 'settings.json'));
 let cfg = config.load();
 // The page is laid out at 380x760 and zoomed by cfg.scale (Settings → Size).
-const size = () => ({ w: Math.round(380 * cfg.scale), h: Math.round(760 * cfg.scale) });
+// Never taller than the screen's work area: then Settings → Position always has room to move it, and the page centres itself.
+const size = () => ({ w: Math.round(380 * cfg.scale), h: Math.min(Math.round(760 * cfg.scale), screen.getPrimaryDisplay().workArea.height) });
 const POLL_MS = 60_000;
 // A session counts as working until its Stop hook, or this long after its last hook event
 // (Stop doesn't fire when you interrupt Claude, so this is the safety net).
