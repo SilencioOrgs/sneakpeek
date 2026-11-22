@@ -9,7 +9,8 @@
     "sneakpeek": "cli.js"
   },
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "test": "node --test test/*.test.js"
   },
   "os": [
     "win32"
