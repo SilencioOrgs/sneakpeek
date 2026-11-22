@@ -45,4 +45,65 @@ function nextSession(prev, running, now) {
   return prev || { working: false, at: 0, since: 0, project: '' };
 }
 
-module.exports = { pickDaemons, parseQuota, isRunning, nextSession };
+// ---- Talking to it ----
+const fs = require('fs'), os = require('os'), path = require('path'), https = require('https');
+const DAEMON_DIR = path.join(os.homedir(), '.gemini', 'antigravity', 'daemon');
+const BODY = JSON.stringify({ metadata: { ideName: 'antigravity', extensionName: 'antigravity', locale: 'en' } });
+
+function readDaemons() {
+  let names = [];
+  try { names = fs.readdirSync(DAEMON_DIR).filter((n) => n.endsWith('.json')); } catch { return []; }
+  const out = [];
+  for (const file of names) {
+    const p = path.join(DAEMON_DIR, file);
+    try { out.push({ file, mtimeMs: fs.statSync(p).mtimeMs, json: JSON.parse(fs.readFileSync(p, 'utf8')) }); } catch {}
+  }
+  return out;
+}
+
+// One request to the language server. It uses a self-signed certificate on 127.0.0.1, so that isn't checked.
+function rpc(port, token, method) {
+  return new Promise((resolve, reject) => {
+    const req = https.request({ host: '127.0.0.1', port, method: 'POST', path: `/exa.language_server_pb.LanguageServerService/${method}`,
+      rejectUnauthorized: false, timeout: 3000,
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(BODY), 'Connect-Protocol-Version': '1', 'X-Codeium-Csrf-Token': token } },
+    (res) => {
+      let s = '';
+      res.on('data', (d) => (s += d));
+      res.on('end', () => {
+        if (res.statusCode < 200 || res.statusCode >= 300) return reject(Object.assign(new Error(`HTTP ${res.statusCode}`), { status: res.statusCode }));
+        try { resolve(s ? JSON.parse(s) : {}); } catch { reject(Object.assign(new Error('Unexpected answer from Antigravity'), { status: res.statusCode })); }
+      });
+    });
+    req.on('timeout', () => req.destroy(new Error('timeout')));
+    req.on('error', reject);
+    req.end(BODY);
+  });
+}
+
+const closedError = () => Object.assign(new Error("Antigravity isn't open"), { closed: true });
+// A 401/403 means the token changed (Antigravity restarted and reused the port): look again, like a dead port.
+const lookAgain = (e) => !e.status || e.status === 401 || e.status === 403;
+
+function createClient({ readDaemons: read = readDaemons, rpc: send = rpc } = {}) {
+  let conn = null; // the server that answered last
+  async function call(method) {
+    let dead = null;
+    if (conn) {
+      try { return await send(conn.port, conn.token, method); }
+      catch (e) { if (!lookAgain(e)) throw e; dead = conn.port; conn = null; }
+    }
+    for (const d of pickDaemons(read()).filter((x) => x.port !== dead)) {
+      try { const r = await send(d.port, d.token, method); conn = d; return r; }
+      catch (e) { if (!lookAgain(e)) { conn = d; throw e; } }
+    }
+    throw closedError();
+  }
+  return {
+    quota: async () => parseQuota(await call('RetrieveUserQuotaSummary')),
+    running: async () => isRunning(await call('GetAllCascadeTrajectories')),
+  };
+}
+
+const client = createClient();
+module.exports = { pickDaemons, parseQuota, isRunning, nextSession, createClient, quota: client.quota, running: client.running };

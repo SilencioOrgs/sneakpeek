@@ -53,3 +53,38 @@ test('nextSession: idle polls keep the time it stopped', () => {
   assert.deepEqual(nextSession(stopped, false, 60000), stopped);
   assert.equal(nextSession(null, false, 5000).at, 0); // never seen working: not "recently used"
 });
+
+const { createClient } = require('../antigravity');
+const daemons = (...ports) => () => ports.map((p, i) => ({ file: `hub_${p}.json`, mtimeMs: 100 - i, json: { httpsPort: p, csrfToken: 't' + p } }));
+
+test('client: uses the first daemon that answers, and keeps it', async () => {
+  const calls = [];
+  const rpc = async (port, token, method) => { calls.push(`${port}:${method}`); if (port !== 2) throw new Error('ECONNREFUSED');
+    return method === 'GetAllCascadeTrajectories' ? { a: { status: 'CASCADE_RUN_STATUS_RUNNING' } } : { groups: [] }; };
+  const c = createClient({ readDaemons: daemons(1, 2, 3), rpc });
+  assert.equal(await c.running(), true);
+  assert.deepEqual(await c.quota(), { plan: '', windows: [] });
+  assert.deepEqual(calls, ['1:GetAllCascadeTrajectories', '2:GetAllCascadeTrajectories', '2:RetrieveUserQuotaSummary']);
+});
+
+test('client: reconnects after the server moves', async () => {
+  let live = 1, files = daemons(1);
+  const rpc = async (port) => { if (port !== live) throw new Error('ECONNREFUSED'); return {}; };
+  const c = createClient({ readDaemons: () => files(), rpc });
+  assert.equal(await c.running(), false);
+  live = 2; files = daemons(2, 1); // Antigravity restarted on a new port
+  assert.equal(await c.running(), false);
+});
+
+test('client: tries at most the newest 5 daemon files, then says closed', async () => {
+  let n = 0;
+  const c = createClient({ readDaemons: daemons(1, 2, 3, 4, 5, 6, 7), rpc: async () => { n++; throw new Error('ECONNREFUSED'); } });
+  await assert.rejects(c.running(), (e) => e.closed === true && e.message === "Antigravity isn't open");
+  assert.equal(n, 5);
+});
+
+test('client: an HTTP error from a live server is not "closed"', async () => {
+  const rpc = async () => { throw Object.assign(new Error('HTTP 500'), { status: 500 }); };
+  const c = createClient({ readDaemons: daemons(1), rpc });
+  await assert.rejects(c.quota(), (e) => e.status === 500 && !e.closed);
+});
