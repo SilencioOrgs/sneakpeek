@@ -23,8 +23,8 @@
 
 Hover the tab and it opens into a panel showing:
 
-- **Your AI usage.** How much of your Claude Code and ChatGPT/Codex limits you've used, and when they reset. An alert shows when a limit passes 80% or 90%.
-- **Which AI is working.** Claude's spinner or ChatGPT's shimmer while it works, and a quiet "done" note when it finishes.
+- **Your AI usage.** How much of your Claude Code, ChatGPT/Codex and Antigravity limits you've used, and when they reset. An alert shows when a limit passes 80% or 90%.
+- **Which AI is working.** Claude's spinner, ChatGPT's shimmer or Antigravity's floating arch while it works, and a quiet "done" note when it finishes.
 - **Approvals and questions.** When Claude Code or Codex asks permission, or Claude asks you a question, answer it right in the panel.
 - **What's playing.** Song, spinning cover art and play/pause/skip for Spotify, YouTube, Apple Music and other players.
 
@@ -102,6 +102,7 @@ npm uninstall -g sneakpeek
 - **Where your tokens go.** They're only sent to Anthropic and OpenAI, to the same usage endpoints the CLIs use for `/usage` and `/status`. When Claude's token expires, SneakPeek refreshes it and saves the new one to the same file, as Claude Code does.
 - **What SneakPeek stores.** Its own settings, cached usage and activity live in `~/.sneakpeek/`.
 - **How it changes your config.** It only ever adds or removes its own entries in `~/.claude/settings.json` and `~/.codex/hooks.json`, and saves a backup (`.bak-sneakpeek`) next to the file before each change. It refuses to touch a file that isn't valid JSON.
+- **Antigravity.** SneakPeek reads the address and key Antigravity saves for its own windows in `~/.gemini/antigravity/daemon/`, and asks Antigravity on your computer (127.0.0.1) for your quota and whether its agent is running. It never uses your Google login, and never reads your conversations.
 - **Music.** It reads Windows' own "now playing" info, the same as the volume-key popup. No Spotify login is needed.
 - **Updates.** A few times a day it reads this repo's `package.json` to see whether there's a newer version. That's the only other request it makes.
 
@@ -112,7 +113,8 @@ npm uninstall -g sneakpeek
 | `main.js` | The app: the tab window, tray, Settings window, polling, update checks |
 | `index.html` | The tab and panel |
 | `settings.html` | The Settings window |
-| `usage.js` | Reads Claude and ChatGPT usage, with backoff for rate limits and a saved cache |
+| `usage.js` | Reads Claude, ChatGPT and Antigravity usage, with backoff for rate limits and a saved cache |
+| `antigravity.js` | Finds the Antigravity IDE on this computer and reads its quota and whether its agent is running |
 | `statusline.js` | Claude Code status line: passes live usage to SneakPeek after every reply |
 | `activity.js` | Hook: records when Claude Code / Codex start and stop working |
 | `ask.js` | Hook: shows permission prompts and questions in SneakPeek and returns your answer |
@@ -121,7 +123,7 @@ npm uninstall -g sneakpeek
 | `cli.js` | The `sneakpeek` command: start, `update`, `--remove` |
 | `banner.js` | The spinning 3D ASCII logo shown in the terminal |
 
-The usage endpoints are undocumented. If Anthropic or OpenAI change them, `usage.js` needs updating. To see what SneakPeek reads, without the UI, run `node usage.js` in the install folder.
+The usage endpoints are undocumented. If Anthropic or OpenAI change them, `usage.js` needs updating. Antigravity's local API is undocumented too; if an Antigravity update changes it, `antigravity.js` needs updating. To see what SneakPeek reads, without the UI, run `node usage.js` in the install folder.
 
 Running from a clone instead: `git clone`, then `npm install`, then `npm start`.
 
