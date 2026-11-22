@@ -23,8 +23,8 @@ const antigravity = require('./antigravity');
 // No settings file yet = first start on this computer: open Settings so integrations can be switched on.
 const firstRun = !fs.existsSync(path.join(os.homedir(), '.sneakpeek', 'settings.json'));
 let cfg = config.load();
-// The page is laid out at 380x620 and zoomed by cfg.scale (Settings → Size).
-const size = () => ({ w: Math.round(380 * cfg.scale), h: Math.round(620 * cfg.scale) });
+// The page is laid out at 380x760 and zoomed by cfg.scale (Settings → Size).
+const size = () => ({ w: Math.round(380 * cfg.scale), h: Math.round(760 * cfg.scale) });
 const POLL_MS = 60_000;
 // A session counts as working until its Stop hook, or this long after its last hook event
 // (Stop doesn't fire when you interrupt Claude, so this is the safety net).
