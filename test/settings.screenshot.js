@@ -25,6 +25,12 @@ const out = process.argv[2] || os.tmpdir();
   check(!!(await page.$('#glowMode')) && !!(await page.$('[data-set="glow"]')), 'no "Glow while waiting" row');
   if (!fail.length) {
     check(await page.$eval('#glowMode', (e) => e.value) === 'ai', 'mode does not start at "Match the AI"');
+    // Windows draws the open list with the options' own colours: they must be dark with light text, like Settings.
+    const opt = await page.$eval('#glowMode option[value="one"]', (o) => { const c = getComputedStyle(o), sel = getComputedStyle(o.parentElement);
+      return { bg: c.backgroundColor, fg: c.color, scheme: sel.colorScheme }; });
+    const lum = (rgb) => { const [r, g, b] = rgb.match(/\d+/g).map(Number); return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255; };
+    check(opt.bg !== 'rgba(0, 0, 0, 0)' && lum(opt.bg) < 0.25 && lum(opt.fg) > 0.75, 'dropdown options not dark with light text: ' + JSON.stringify(opt));
+    check(opt.scheme === 'dark', 'dropdown not in dark colour scheme: ' + opt.scheme);
     check(!(await visible()), 'colour picker shown for "Match the AI"');
     await page.selectOption('#glowMode', 'one');
     await page.waitForTimeout(200);

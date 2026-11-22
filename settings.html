@@ -58,8 +58,9 @@
   .num:hover { border-color: var(--knob-off); }
   .levels { display: flex; gap: 6px; align-items: center; color: var(--muted); }
   /* Glow colour: "Match the AI" or one colour from the system picker */
-  .pick-mode { padding: 6px 8px; border-radius: 8px; border: 1px solid var(--edge); background: var(--field); color: var(--text); font: inherit; cursor: pointer; }
+  .pick-mode { color-scheme: dark; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--edge); background: var(--field); color: var(--text); font: inherit; cursor: pointer; }
   .pick-mode:hover, .pick:hover { border-color: var(--knob-off); }
+  .pick-mode option { background: #161616; color: var(--text); } /* Windows draws the open list in these colours */
   .pick { width: 34px; height: 30px; padding: 2px; border-radius: 8px; border: 1px solid var(--edge); background: var(--field); cursor: pointer; }
   .slider { display: flex; align-items: center; gap: 10px; width: 190px; flex: none; }
   .slider output { width: 52px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
@@ -238,7 +239,7 @@ function levels() {
 }
 // Glow colour: switching to "One colour" starts from the picker's colour (white the first time).
 $('#glowMode').addEventListener('change', (e) => set({ glowColor: e.target.value === 'ai' ? 'ai' : $('#glowColor').value }));
-$('#glowColor').addEventListener('change', (e) => set({ glowColor: e.target.value }));
+$('#glowColor').addEventListener('input', (e) => live({ glowColor: e.target.value })); // the tab previews it as you pick
 $('#lvl1').addEventListener('change', levels); $('#lvl2').addEventListener('change', levels);
 
 // Sliders apply live while dragging (lightly throttled); SneakPeek saves the final value.

@@ -64,23 +64,42 @@ const H = Number(process.env.PANEL_H || 760);
   await page.screenshot({ path: path.join(out, 'tab-antigravity-working.png'), clip: { x: 260, y: H / 2 - 60, width: 120, height: 120 } });
 
   // Glow while an AI waits: on with a card, in its colour; off without cards or when switched off.
+  // It is a copy of the tab's shape that only fades (cheap), never an animated blur on the tab itself.
   const SET = { claude: true, codex: true, antigravity: true, music: true, songNotes: false, sounds: false, doneNotes: true, doneMinSec: 10,
     alerts: false, alertLevels: [80, 90], scale: 1, offset: 50, glow: true, glowColor: 'ai' };
   const card = (n, ai) => ({ id: `0000000${n}-0000-4000-8000-000000000000`, ai, tool: 'Bash', verb: 'run', detail: 'npm test', project: 'sneakpeek', at: Date.now() + n, pid: 1 });
-  const glowAfter = async (fn, arg) => { await page.evaluate(fn, arg); await page.waitForTimeout(700); return page.evaluate(() => getComputedStyle(document.querySelector('#shape')).filter); };
-  let g = await glowAfter(([c]) => window.__cb.requests([c]), [card(1, 'claude')]);
-  check(/drop-shadow/.test(g) && /rgb\(217, 119, 87/.test(g), 'Claude waiting: no orange glow (' + g + ')');
+  const state = () => page.evaluate(() => { const g = document.querySelector('#glow'), sh = getComputedStyle(document.querySelector('#shape'));
+    const c = g ? getComputedStyle(g) : null;
+    return { on: !!c && c.animationName !== 'none' && c.opacity !== '0', filter: c ? c.filter : 'none', shapeBusy: sh.filter !== 'none' || sh.animationName !== 'none' }; });
+  const after = async (fn, arg, wait = 700) => { await page.evaluate(fn, arg); await page.waitForTimeout(wait); return state(); };
+  let g = await after(([c]) => window.__cb.requests([c]), [card(1, 'claude')]);
+  check(g.on && /rgb\(217, 119, 87/.test(g.filter), 'Claude waiting: no orange glow (' + JSON.stringify(g) + ')');
+  check(!g.shapeBusy, 'the tab itself is filtered or animated (redraws every frame)');
   await page.screenshot({ path: path.join(out, 'glow-claude.png') });
-  g = await glowAfter(([a, b]) => window.__cb.requests([a, b]), [card(1, 'codex'), card(2, 'claude')]);
-  check(/rgb\(0, 255, 200/.test(g), 'Codex first: glow not green (' + g + ')');
-  g = await glowAfter((s) => window.__cb.settings({ ...s, glowColor: '#ff00ff' }), SET);
-  check(/rgb\(255, 0, 255/.test(g), 'one colour: glow not #ff00ff (' + g + ')');
-  g = await glowAfter((s) => window.__cb.settings({ ...s, glow: false }), SET);
-  check(g === 'none', 'switch off: still glowing (' + g + ')');
-  await page.evaluate((s) => window.__cb.settings(s), SET);
-  g = await glowAfter(() => window.__cb.requests([]));
-  check(g === 'none', 'no cards: still glowing (' + g + ')');
+  g = await after(([a, b]) => window.__cb.requests([a, b]), [card(1, 'codex'), card(2, 'claude')]);
+  check(/rgb\(0, 255, 200/.test(g.filter), 'Codex first: glow not green (' + g.filter + ')');
+  g = await after((s) => window.__cb.settings({ ...s, glowColor: '#ff00ff' }), SET);
+  check(g.on && /rgb\(255, 0, 255/.test(g.filter), 'one colour: glow not #ff00ff (' + g.filter + ')');
+  g = await after((s) => window.__cb.settings({ ...s, glow: false }), SET);
+  check(!g.on, 'switch off: still glowing');
+  await page.evaluate((s) => window.__cb.settings(s), SET); // back on: this previews for 3 s
+  g = await after(() => window.__cb.requests([]), undefined, 3400);
+  check(!g.on, 'no cards: still glowing');
 
+  // Preview: changing a glow setting lights the tab for 3 s, even with nothing waiting.
+  g = await after((s) => window.__cb.settings({ ...s, glowColor: '#00ff00' }), SET);
+  check(g.on && /rgb\(0, 255, 0/.test(g.filter), 'no preview after choosing a colour (' + JSON.stringify(g) + ')');
+  g = await after(() => {}, undefined, 3200);
+  check(!g.on, 'preview did not end after 3 s');
+  g = await after((s) => window.__cb.settings({ ...s, glowColor: '#00ff00', glow: false }), SET);
+  check(!g.on, 'preview shown although the glow was switched off');
+  g = await after((s) => window.__cb.settings({ ...s, glowColor: '#00ff00' }), SET);
+  check(g.on, 'no preview after switching the glow on');
+  await page.waitForTimeout(3200);
+  g = await after((s) => window.__cb.settings({ ...s, glowColor: '#00ff00', sounds: true }), SET);
+  check(!g.on, 'preview shown for a change that is not about the glow');
+  await page.evaluate((s) => window.__cb.settings(s), SET);
+  await page.waitForTimeout(3200)
   // A shorter window (main.js keeps the window inside small screens): the tab stays centred and the panel fits.
   await page.setViewportSize({ width: 380, height: 560 });
   await page.waitForTimeout(300);
