@@ -33,6 +33,8 @@ const ACTIVITY = path.join(os.homedir(), '.sneakpeek', 'activity.json');
 const REQS = path.join(os.homedir(), '.sneakpeek', 'requests');
 const PIDFILE = path.join(os.homedir(), '.sneakpeek', 'sneakpeek.pid');
 let win, settingsWin, tray, last = null;
+// Send to the widget window, unless it's gone (e.g. while quitting): sending to a destroyed window throws.
+const send = (channel, data) => { if (win && !win.isDestroyed()) win.webContents.send(channel, data); };
 
 // Start with Windows: a per-user startup entry that runs this same Electron with this app folder.
 const LOGIN = { path: process.execPath, args: [path.resolve(__dirname)], name: 'SneakPeek' };
@@ -46,8 +48,34 @@ function migrateStartup() {
   if (hasStartupEntry('Clio')) { app.setLoginItemSettings({ ...old, openAtLogin: false }); setStartup(true); }
 }
 
-if (!app.requestSingleInstanceLock()) app.quit();
-app.on('second-instance', () => openSettings()); // launching SneakPeek again opens Settings
+// One copy at a time. Launching again opens Settings; launching with --quit (from `sneakpeek update`) closes it.
+// A second copy only passes its arguments to the running one, then exits at once: it must not reach startup,
+// which would overwrite the pid file (hooks would think SneakPeek isn't running) and clear waiting requests.
+const primary = app.requestSingleInstanceLock();
+if (!primary || process.argv.includes('--quit')) app.exit(0); // --quit with nothing running: nothing to close
+app.on('second-instance', (_, argv) => (argv.includes('--quit') ? app.quit() : openSettings()));
+
+// ---- Updates: compare our version with package.json on GitHub, a few times a day ----
+const REPO_PKG = 'https://raw.githubusercontent.com/loyd000/sneakpeek/main/package.json';
+const installedWithNpm = __dirname.split(path.sep).includes('node_modules'); // else: running from a git clone
+let update = null; // newer version on GitHub, if any
+const isNewer = (a, b) => { const x = a.split('.').map(Number), y = b.split('.').map(Number);
+  for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); return false; };
+async function checkForUpdate() {
+  try {
+    const res = await fetch(REPO_PKG, { signal: AbortSignal.timeout(10000), cache: 'no-store' });
+    if (!res.ok) return;
+    const v = (await res.json()).version;
+    update = typeof v === 'string' && /^\d+\.\d+\.\d+$/.test(v) && isNewer(v, app.getVersion()) ? v : null;
+    buildTray();
+    if (settingsWin && !settingsWin.isDestroyed()) settingsWin.webContents.send('cfg:changed');
+  } catch {} // offline: try again later
+}
+// Runs `sneakpeek update` in its own window, so the npm output is visible; it closes and restarts this app.
+function runUpdate() {
+  if (!installedWithNpm) return;
+  spawn('cmd.exe', ['/c', 'sneakpeek update || pause'], { detached: true, stdio: 'ignore', windowsHide: false }).unref();
+}
 
 // Docked to the right edge of the primary screen; Settings → Position moves it up or down.
 function dock() {
@@ -57,7 +85,7 @@ function dock() {
 
 async function refresh() {
   last = await getUsage({ claude: cfg.claude, codex: cfg.codex });
-  win?.webContents.send('usage', last);
+  send('usage', last);
 }
 
 // Settings changed (from the Settings window): save, then apply what changed.
@@ -76,8 +104,8 @@ function applySettings(next) {
   cfg = config.clean(next);
   saveSoon();
   if (prev.scale !== cfg.scale || prev.offset !== cfg.offset) { dock(); win.webContents.setZoomFactor(cfg.scale); }
-  if (prev.scale !== cfg.scale && lastArt) win.webContents.send('media', { artOnly: true, ...sizedArt(lastArt) }); // re-fit covers to the new size
-  win.webContents.send('settings', cfg);
+  if (prev.scale !== cfg.scale && lastArt) send('media', { artOnly: true, ...sizedArt(lastArt) }); // re-fit covers to the new size
+  send('settings', cfg);
   if (prev.claude !== cfg.claude || prev.codex !== cfg.codex) { lastActivity = ''; activity(); refresh(); }
   if (prev.music !== cfg.music) cfg.music ? startMedia() : stopMedia();
   return cfg;
@@ -98,7 +126,7 @@ function sizedArt(art) {
 }
 function sendMedia(msg) {
   if ('art' in msg) { lastArt = msg.art; Object.assign(msg, sizedArt(msg.art)); }
-  win?.webContents.send('media', msg);
+  send('media', msg);
 }
 function startMedia() {
   if (media || !cfg.music) return;
@@ -117,11 +145,11 @@ function startMedia() {
   });
   media.on('exit', () => {
     media = null;
-    win?.webContents.send('media', { none: true });
+    send('media', { none: true });
     if (cfg.music) setTimeout(startMedia, Math.min(60_000, 2000 * 2 ** mediaRetry++)); // crashed: retry, backing off
   });
 }
-function stopMedia() { if (media) { const m = media; media = null; m.removeAllListeners('exit'); m.kill(); win?.webContents.send('media', { none: true }); } }
+function stopMedia() { if (media) { const m = media; media = null; m.removeAllListeners('exit'); m.kill(); send('media', { none: true }); } }
 ipcMain.on('media:cmd', (_, cmd) => { if (['toggle', 'next', 'prev'].includes(cmd)) media?.stdin.write(cmd + '\n'); });
 app.on('will-quit', stopMedia);
 
@@ -147,14 +175,14 @@ function activity() {
   for (const ai of ['claude', 'codex'].filter((x) => cfg[x])) for (const [sid, s] of Object.entries(f[ai] || {})) {
     now.set(ai + ':' + sid, s.working);
     // Was working at the last read, now stopped: tell the page it's done (toast + sound).
-    if (wasWorking?.get(ai + ':' + sid) && !s.working) win?.webContents.send('done', { ai, project: s.project || '', ranMs: s.at - (s.since ?? s.at) });
+    if (wasWorking?.get(ai + ':' + sid) && !s.working) send('done', { ai, project: s.project || '', ranMs: s.at - (s.since ?? s.at) });
     if (!latest || s.at > latest.at) latest = { ai, at: s.at };
     if (s.working && Date.now() - s.at < STALE_MS && (!busy || s.at > busy.at)) busy = { ai, at: s.at };
   }
   wasWorking = now;
   const a = { ai: (busy || latest)?.ai || (cfg.claude ? 'claude' : 'codex'), working: !!busy };
   const key = JSON.stringify(a);
-  if (key !== lastActivity) { lastActivity = key; win?.webContents.send('activity', a); }
+  if (key !== lastActivity) { lastActivity = key; send('activity', a); }
 }
 
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
@@ -172,12 +200,13 @@ function requests() {
     }
   } catch {}
   list.sort((a, b) => a.at - b.at);
-  win?.webContents.send('requests', list);
+  send('requests', list);
   clearTimeout(reqTimer);
   if (list.length) reqTimer = setTimeout(requests, 2000); // keep checking while cards are up
 }
 
 app.whenReady().then(() => {
+  if (!primary) return; // belt and braces: never run startup in a second copy
   migrateStartup();
   if (firstRun) { try { config.save(cfg); } catch {} setTimeout(openSettings, 1200); }
   fs.mkdirSync(REQS, { recursive: true });
@@ -194,26 +223,22 @@ app.whenReady().then(() => {
   win.setVisibleOnAllWorkspaces(true);
   win.setIgnoreMouseEvents(true, { forward: true }); // transparent area clicks pass through to the desktop
   dock();
-  win.webContents.on('did-finish-load', () => { win.webContents.setZoomFactor(cfg.scale); win.webContents.send('settings', cfg); lastActivity = ''; activity(); requests(); });
+  win.webContents.on('did-finish-load', () => { win.webContents.setZoomFactor(cfg.scale); send('settings', cfg); lastActivity = ''; activity(); requests(); });
   win.loadFile('index.html');
   win.once('ready-to-show', () => {
     win.showInactive();
     const saved = cachedUsage(); // last session's numbers, shown at once while the fresh check runs
-    if (saved) win.webContents.send('usage', saved);
+    if (saved) send('usage', saved);
     refresh();
     startMedia();
   });
   screen.on('display-metrics-changed', dock);
 
   tray = new Tray(path.join(__dirname, 'assets', 'sneakpeek.ico'));
-  tray.setToolTip('SneakPeek');
   tray.on('click', openSettings);
-  tray.setContextMenu(Menu.buildFromTemplate([
-    { label: 'Settings…', click: openSettings },
-    { label: 'Refresh now', click: refresh },
-    { type: 'separator' },
-    { label: 'Quit SneakPeek', click: () => app.quit() },
-  ]));
+  buildTray();
+  setTimeout(checkForUpdate, 60_000); // a minute after start, then every 6 hours
+  setInterval(checkForUpdate, 6 * 3600_000);
   setInterval(refresh, POLL_MS);
   setInterval(activity, 10_000); // expire stale "working" sessions
 
@@ -257,7 +282,20 @@ ipcMain.on('menu', () =>
 
 // Settings window API. Only the Settings window may call these.
 const fromSettings = (e) => settingsWin && !settingsWin.isDestroyed() && e.sender === settingsWin.webContents;
-const snapshot = () => ({ settings: cfg, integrations: integrations.state(), startup: startsWithWindows(), version: app.getVersion() });
+function buildTray() {
+  if (!tray) return;
+  tray.setToolTip(update ? `SneakPeek: version ${update} is available` : 'SneakPeek');
+  tray.setContextMenu(Menu.buildFromTemplate([
+    ...(update && installedWithNpm ? [{ label: `Update to ${update}`, click: runUpdate }, { type: 'separator' }] : []),
+    { label: 'Settings…', click: openSettings },
+    { label: 'Refresh now', click: refresh },
+    { type: 'separator' },
+    { label: 'Quit SneakPeek', click: () => app.quit() },
+  ]));
+}
+
+const snapshot = () => ({ settings: cfg, integrations: integrations.state(), startup: startsWithWindows(), version: app.getVersion(),
+  update: { available: update, canInstall: installedWithNpm } });
 // Every call answers with the real state afterwards, plus an error message if the change didn't happen.
 const guarded = (e, fn) => {
   if (!fromSettings(e)) return null;
@@ -268,3 +306,5 @@ ipcMain.handle('cfg:set', (e, patch) => guarded(e, () => { if (patch && typeof p
 ipcMain.handle('int:set', (e, key, on) => guarded(e, () => { if (typeof key === 'string') integrations.set(key, !!on); }));
 ipcMain.handle('int:removeAll', (e) => guarded(e, () => integrations.removeAll()));
 ipcMain.handle('startup:set', (e, on) => guarded(e, () => setStartup(!!on)));
+ipcMain.handle('update:check', async (e) => { if (fromSettings(e)) await checkForUpdate(); return guarded(e, () => {}); });
+ipcMain.handle('update:run', (e) => guarded(e, runUpdate));

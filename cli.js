@@ -1,12 +1,25 @@
 #!/usr/bin/env node
 // The `sneakpeek` command (installed by `npm install -g github:loyd000/sneakpeek`).
 //   sneakpeek           start SneakPeek (or open its Settings if it's already running)
+//   sneakpeek update    install the latest version from GitHub and restart SneakPeek
 //   sneakpeek --remove  take SneakPeek's hooks, status line and startup entry out of Claude Code, Codex and Windows.
 //                       Run this before `npm uninstall -g sneakpeek`, or the hooks keep pointing at a deleted folder.
-const { spawn, execFileSync } = require('child_process');
-const path = require('path');
+const { spawn, spawnSync, execFileSync } = require('child_process');
+const fs = require('fs'), os = require('os'), path = require('path');
 
+const REPO = 'github:loyd000/sneakpeek';
 const args = process.argv.slice(2);
+const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+
+if (args.includes('--help') || args.includes('-h')) {
+  console.log([
+    'sneakpeek           start SneakPeek (or open Settings if it is already running)',
+    'sneakpeek update    install the latest version from GitHub and restart SneakPeek',
+    'sneakpeek --remove  remove its hooks and startup entry before uninstalling',
+  ].join('\n'));
+  process.exit(0);
+}
 
 if (args.includes('--remove')) {
   let problems = 0;
@@ -20,12 +33,31 @@ if (args.includes('--remove')) {
   process.exit(problems ? 1 : 0);
 }
 
-if (args.includes('--help') || args.includes('-h')) {
-  console.log('sneakpeek           start SneakPeek (or open Settings if it is already running)\nsneakpeek --remove  remove its hooks and startup entry before uninstalling');
+if (args[0] === 'update') {
+  // Windows won't let npm replace SneakPeek's files while it runs, so close it first.
+  let pid = 0;
+  try { pid = Number(fs.readFileSync(path.join(os.homedir(), '.sneakpeek', 'sneakpeek.pid'), 'utf8')); } catch {}
+  const wasRunning = pid > 0 && alive(pid);
+  if (wasRunning) {
+    console.log('Closing SneakPeek...');
+    spawnSync(require('electron'), [__dirname, '--quit']); // a second copy hands "--quit" to the running one
+    for (let i = 0; i < 50 && alive(pid); i++) sleep(200);
+    if (alive(pid)) { console.error("SneakPeek didn't close. Quit it from the tray icon, then run `sneakpeek update` again."); process.exit(1); }
+    sleep(1500); // let its helper processes let go of the files
+  }
+  console.log('Installing the latest SneakPeek from GitHub...');
+  const r = spawnSync('npm', ['install', '-g', REPO, '--no-audit', '--no-fund'], { stdio: 'inherit', shell: true });
+  if (r.status !== 0) {
+    console.error('The update failed (see above). Your current version is unchanged; try again, or run: npm install -g ' + REPO);
+    process.exit(1);
+  }
+  if (wasRunning) spawn('sneakpeek', [], { shell: true, detached: true, stdio: 'ignore', windowsHide: true }).unref();
+  console.log(wasRunning ? 'Updated. SneakPeek is starting again.' : 'Updated. Run `sneakpeek` to start it.');
   process.exit(0);
 }
 
 // From Node, require('electron') gives the path to the Electron that npm installed with SneakPeek.
+// (The first run after an install downloads Electron's program file once.)
 const electron = require('electron');
 const child = spawn(electron, [path.join(__dirname), ...args], { detached: true, stdio: 'ignore' });
 child.unref();

@@ -33,11 +33,28 @@ Turn on **Start with Windows** in Settings if you want SneakPeek to start with W
 
 ## Update
 
+SneakPeek checks GitHub for a new version a few times a day. When one is out, the tray icon's menu shows **Update to x.y.z**, and Settings shows **Update now**. Either one closes SneakPeek, installs the new version and starts it again.
+
+You can also update from a terminal at any time:
+
 ```
-npm install -g github:loyd000/sneakpeek
+sneakpeek update
 ```
 
-Then quit SneakPeek from the tray and start it again.
+Your settings stay as they are, and so do the hooks: they point at the same install folder.
+
+**Installed before version 0.2.0?** Those copies can't update themselves yet, so update once by hand. Quit SneakPeek from the tray icon, then run `npm install -g github:loyd000/sneakpeek` and `sneakpeek`. From then on, updates work as described above.
+
+### Releasing a new version (for the maintainer)
+
+SneakPeek only shows an update when the version on GitHub is higher than the one installed. So with every release, raise the version and push:
+
+```
+npm version patch     # or: minor, for new features
+git push --follow-tags
+```
+
+`npm version` raises the number in `package.json` and commits it. Everyone's SneakPeek sees the new version within a few hours.
 
 ## Uninstall
 

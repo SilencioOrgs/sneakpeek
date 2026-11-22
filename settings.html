@@ -63,6 +63,11 @@
 
   button.danger { all: unset; cursor: pointer; padding: 8px 14px; border-radius: 10px; font-weight: 600; font-size: 12px; color: var(--hot); background: var(--hot-bg); }
   button.danger:hover { background: var(--hot-bg-hover); }
+  button.plain { all: unset; cursor: pointer; flex: none; padding: 8px 14px; border-radius: 10px; font-weight: 600; font-size: 12px; color: var(--text); background: rgba(255, 255, 255, .08); }
+  button.plain:hover { background: rgba(255, 255, 255, .14); }
+  button.plain.go { background: var(--text); color: var(--ink); }
+  button.plain.go:hover { opacity: .85; }
+  button.plain:disabled { opacity: .5; cursor: default; }
   footer { margin-top: 26px; color: var(--muted); font-size: 11.5px; }
   code { font: 11.5px "Cascadia Mono", Consolas, monospace; }
 
@@ -117,6 +122,7 @@
 
   <h2>General</h2>
   <div class="row"><div class="txt"><div class="name">Start with Windows</div></div><label class="sw"><input type="checkbox" id="startup"></label></div>
+  <div class="row"><div class="txt"><div class="name">Updates</div><div class="desc" id="update-desc"></div></div><button class="plain" id="update-btn">Check now</button></div>
   <div class="row"><div class="txt"><div class="name">Remove all integrations</div><div class="desc">Takes SneakPeek's hooks and status line out of Claude Code and Codex</div></div><button class="danger" id="remove-all">Remove</button></div>
 
   <footer>Saved to <code>~/.sneakpeek/settings.json</code></footer>
@@ -173,6 +179,15 @@ function render(s) {
   $('#scale').value = Math.round(c.scale * 100); $('#scale-out').value = Math.round(c.scale * 100) + '%';
   $('#offset').value = c.offset; $('#offset-out').value = c.offset < 15 ? 'Top' : c.offset > 85 ? 'Bottom' : c.offset === 50 ? 'Middle' : c.offset + '%';
   $('#startup').checked = s.startup;
+
+  // Updates: a newer version on GitHub can be installed in place (npm install), or pulled (git clone).
+  const u = s.update || {}, btn = $('#update-btn');
+  btn.disabled = false;
+  btn.classList.toggle('go', !!(u.available && u.canInstall));
+  btn.textContent = u.available && u.canInstall ? 'Update now' : 'Check now';
+  $('#update-desc').textContent = !u.available ? `You have the latest version (${s.version})`
+    : u.canInstall ? `Version ${u.available} is available. SneakPeek closes, updates and starts again.`
+    : `Version ${u.available} is available. This copy runs from a folder, so update it with git pull.`;
 }
 
 // Every change goes through here: show the real state afterwards, and say so if it didn't happen.
@@ -217,6 +232,13 @@ const live = (patch) => { clearTimeout(t); t = setTimeout(() => set(patch), 40);
 $('#scale').addEventListener('input', (e) => { $('#scale-out').value = e.target.value + '%'; live({ scale: e.target.value / 100 }); });
 $('#offset').addEventListener('input', (e) => live({ offset: +e.target.value }));
 $('#startup').addEventListener('change', (e) => apply(window.sneakpeek.setStartup(e.target.checked)));
+$('#update-btn').addEventListener('click', () => {
+  const u = snap?.update || {}, btn = $('#update-btn');
+  if (u.available && u.canInstall) { btn.disabled = true; btn.textContent = 'Updating…'; apply(window.sneakpeek.runUpdate()); return; }
+  btn.disabled = true; btn.textContent = 'Checking…';
+  apply(window.sneakpeek.checkUpdate());
+});
+window.sneakpeek.onChanged(() => apply(window.sneakpeek.get()));
 $('#remove-all').addEventListener('click', () => {
   if (confirm('Remove all of SneakPeek\'s hooks and its status line from Claude Code and Codex?\n\nSneakPeek keeps running but stops getting live updates, animations and approvals. You can switch them back on here.'))
     apply(window.sneakpeek.removeAll());
