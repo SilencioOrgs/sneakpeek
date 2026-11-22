@@ -13,6 +13,8 @@ const DEFAULTS = {
   doneMinSec: 10,        // ...only for work that ran at least this long
   alerts: true,          // usage alerts
   alertLevels: [80, 90], // ...at these percentages
+  glow: true,            // glow behind the tab while an AI waits for an answer
+  glowColor: 'ai',       // ...'ai' = the asking AI's colour, or one #rrggbb colour
   scale: 0.75,           // widget size
   offset: 50,            // vertical position on the screen edge, 0 = top, 100 = bottom
 };
@@ -25,6 +27,8 @@ function clean(s) {
     claude: bool('claude'), codex: bool('codex'), antigravity: bool('antigravity'), music: bool('music'), songNotes: bool('songNotes'), sounds: bool('sounds'), doneNotes: bool('doneNotes'), alerts: bool('alerts'),
     doneMinSec: num(s.doneMinSec, 0, 600, d.doneMinSec),
     alertLevels: levels.length ? levels.slice(0, 3) : d.alertLevels,
+    glow: bool('glow'),
+    glowColor: typeof s.glowColor === 'string' && /^#[0-9a-f]{6}$/i.test(s.glowColor) ? s.glowColor : d.glowColor,
     scale: num(s.scale, 0.5, 1.25, d.scale),
     offset: num(s.offset, 0, 100, d.offset),
   };
