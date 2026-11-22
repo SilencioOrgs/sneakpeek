@@ -39,7 +39,7 @@ function findServers() {
   if (process.platform !== 'win32') { note('Not Windows: skipping the process search.'); return []; }
   let rows = [];
   try {
-    const out = ps("Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'language_server*' -or $_.Name -eq 'agy.exe' -or $_.Name -like 'Antigravity*' } | Select-Object ProcessId,ParentProcessId,Name,CommandLine | ConvertTo-Json -Compress");
+    const out = ps("Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'language_server*' -or $_.Name -eq 'agy.exe' -or $_.Name -like 'Antigravity*' } | Select-Object ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine | ConvertTo-Json -Compress");
     rows = out.trim() ? [].concat(JSON.parse(out)) : [];
   } catch (e) { note('PowerShell process search failed: ' + e.message.split('\n')[0]); }
   const servers = [];
@@ -51,7 +51,7 @@ function findServers() {
     const token = (cmd.match(/--csrf_token[=\s]+([a-zA-Z0-9-]+)/i) || [])[1];
     const extPort = Number((cmd.match(/--(?:extension_server_port|hub-port)[=\s]+(\d+)/i) || [])[1]) || 0;
     const appData = (cmd.match(/--app_data_dir[=\s]+("?)([^"\s]+)\1/i) || [])[2] || '';
-    servers.push({ pid: r.ProcessId, name: r.Name, token, extPort, appData, antigravity: /antigravity/i.test(cmd), parent: r.ParentProcessId,
+    servers.push({ pid: r.ProcessId, name: r.Name, exe: r.ExecutablePath, token, extPort, appData, antigravity: /antigravity/i.test(cmd), parent: r.ParentProcessId,
       flags: hideToken(cmd).replace(/^("[^"]*"|\S+)\s*/, '') });
   }
   return servers;
@@ -119,9 +119,10 @@ function daemonFiles() {
   } catch {}
   return out.sort((a, b) => b.mtime - a.mtime);
 }
-let live = null; // { proto, port, token } once a quota call worked
+let live = null, exePath = null, statusMethods = ['GetAllCascadeTrajectories']; // { proto, port, token } once a quota call worked
 async function quota() {
   log('\n1) Antigravity language server');
+  if (arg('--exe')) exePath = arg('--exe'); // for testing: the language server program to read request names from
   let targets;
   if (arg('--port')) targets = [{ pid: 0, token: arg('--token'), ports: [Number(arg('--port'))] }];
   else {
@@ -138,6 +139,7 @@ async function quota() {
       log(`      started with (secrets hidden): ${s.flags.slice(0, 1200) || '(no arguments)'}`);
     }
     // No token on the command line: still try, some versions accept requests without one.
+    exePath = servers.find((s) => s.exe)?.exe;
     targets = [...fromHubs, ...servers.map((s) => ({ ...s, ports: [...new Set([...listeningPorts(s.pid), ...(s.extPort ? [s.extPort] : [])])] }))];
   }
   for (const t of targets) {
@@ -153,8 +155,7 @@ async function quota() {
       log(`  RetrieveUserQuotaSummary: HTTP ${sum.status ?? sum.error}   GetUserStatus: HTTP ${st.status ?? st.error}`);
       printQuota(sum.json, st.json);
       live = { proto, port, token: t.token };
-      const s = await agentStatus();
-      log(`  agent status now: ${s.text}`);
+      await tryStatusMethods();
       return;
     }
   }
@@ -194,32 +195,65 @@ function findHints(ports) {
 }
 
 // ---- Agent run status, straight from the language server. Only enum values (like ..._RUNNING) are kept: no titles or text. ----
-async function agentStatus() {
-  const r = await rpc(live.proto, live.port, live.token, 'GetAllCascadeTrajectories', META);
-  if (r.status !== 200) return { text: `GetAllCascadeTrajectories: HTTP ${r.status ?? r.error} ${scrub(r.text || '').slice(0, 80)}`, counts: {} };
+const STATE_KEY = /status|state|phase|running|active|busy|working|generating|inprogress|idle/i;
+async function agentStatus(method = 'GetAllCascadeTrajectories') {
+  const r = await rpc(live.proto, live.port, live.token, method, META);
+  if (r.status !== 200) return { ok: false, text: `HTTP ${r.status ?? r.error} ${scrub(r.text || '').replace(/\s+/g, ' ').slice(0, 80)}`, counts: {} };
   const counts = {};
+  const add = (k) => (counts[k] = (counts[k] || 0) + 1);
   const walk = (o, k = '') => {
     if (Array.isArray(o)) return o.forEach((x) => walk(x, k));
     if (o && typeof o === 'object') return Object.entries(o).forEach(([kk, v]) => walk(v, kk));
-    if (typeof o === 'string' && /status|state/i.test(k) && /^[A-Z][A-Z0-9_]{2,}$/.test(o)) counts[`${k}=${o}`] = (counts[`${k}=${o}`] || 0) + 1;
+    if (typeof o === 'string' && STATE_KEY.test(k) && /^[A-Z][A-Z0-9_]{2,}$/.test(o)) add(`${k}=${o}`);
+    if (typeof o === 'boolean' && STATE_KEY.test(k)) add(`${k}=${o}`);
   };
   walk(r.json);
-  report.statusShape ??= Object.keys(r.json || {});
+  const keys = Object.keys(r.json || {});
   const list = Object.entries(counts).map(([k, n]) => `${k} x${n}`).join('  ');
-  return { text: list || `(no status fields; top-level keys: ${Object.keys(r.json || {}).join(', ') || 'none'})`, counts };
+  return { ok: true, keys, counts, text: list || `(no status fields; top-level keys: ${keys.join(', ') || 'none'})` };
+}
+// The language server's own program file lists every request it answers. Pick the read-only ones (Get/List)
+// that sound like agent or conversation state, and see which ones answer. Nothing that changes anything is called.
+function methodNames() {
+  if (!exePath) return [];
+  try {
+    const bin = fs.readFileSync(exePath).toString('latin1');
+    return [...new Set([...bin.matchAll(/LanguageServerService\/([A-Z][A-Za-z0-9]{2,60})/g)].map((m) => m[1]))].sort();
+  } catch (e) { note(`Couldn't read the language server program: ${e.code || e.message}`); return []; }
+}
+async function tryStatusMethods() {
+  const all = methodNames();
+  report.methods = all;
+  const pick = all.filter((m) => /^(Get|List)/.test(m) && !/Stream|Download|Upload|Export|Log/.test(m) &&
+    /Cascade|Trajector|Conversation|Agent|Session|Status|Active|Running|Task|Step|Hub|Run/.test(m)).slice(0, 30);
+  log(`\n  The language server answers ${all.length} kinds of requests. Trying ${pick.length} read-only ones that may show agent state:`);
+  report.statusProbe = [];
+  for (const m of [...new Set(['GetAllCascadeTrajectories', ...pick])]) {
+    const s = await agentStatus(m);
+    report.statusProbe.push({ method: m, ok: s.ok, keys: s.keys, counts: s.counts, text: s.ok ? undefined : s.text });
+    log(`    ${m}: ${s.ok ? 'OK ' : ''}${s.text}`);
+    if (s.ok && (Object.keys(s.counts).length || s.keys.length)) statusMethods.push(m);
+  }
+  statusMethods = [...new Set(statusMethods)].slice(0, 8);
 }
 function watchStatus() {
   if (!live) return;
-  log('  Asking Antigravity for the agent status every 2s; changes show as STATUS lines.');
-  let last = '';
+  log(`  Asking Antigravity every 2s (${statusMethods.join(', ')}); changes show as STATUS lines.`);
+  const last = {};
   report.status = [];
+  let busy = false;
   setInterval(async () => {
-    const s = await agentStatus();
-    const key = JSON.stringify(s.counts);
-    if (key === last) return;
-    last = key;
-    report.status.push({ t: Date.now() - t0, status: s.counts, text: Object.keys(s.counts).length ? undefined : s.text });
-    log(`    ${since().padStart(7)}  STATUS ${s.text}`);
+    if (busy) return;
+    busy = true;
+    for (const m of statusMethods) {
+      const s = await agentStatus(m);
+      const key = JSON.stringify([s.counts, s.keys]);
+      if (key === last[m]) continue;
+      last[m] = key;
+      report.status.push({ t: Date.now() - t0, method: m, status: s.counts, keys: s.keys });
+      log(`    ${since().padStart(7)}  STATUS ${m}: ${s.text}`);
+    }
+    busy = false;
   }, 2000);
 }
 // Which settings app_storage.json holds (it's rewritten often while Antigravity runs). Names only, no values.
@@ -299,8 +333,9 @@ function finish() {
   watchStatus();
   log(`
 Now, in the Antigravity IDE:
-  1. Press Enter here, then right away send the agent a prompt that takes a minute or so
-     (for example: "read this project and write a short summary in NOTES.md").
+  1. Press Enter here (just Enter: don't type the prompt here), then switch to Antigravity and give its
+     agent a task that takes a minute or more, for example: "read this project and write a short
+     summary of every file in NOTES.md".
   2. Press Enter here again the moment the agent finishes.
   3. Wait about 30 seconds, then press Enter a third time (or Ctrl+C) to save the report.
 `);
