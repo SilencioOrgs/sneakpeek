@@ -18,6 +18,7 @@ const os = require('os');
 const { getUsage, cachedUsage } = require('./usage');
 const config = require('./config');
 const integrations = require('./integrations');
+const antigravity = require('./antigravity');
 
 // No settings file yet = first start on this computer: open Settings so integrations can be switched on.
 const firstRun = !fs.existsSync(path.join(os.homedir(), '.sneakpeek', 'settings.json'));
@@ -84,7 +85,7 @@ function dock() {
 }
 
 async function refresh() {
-  last = await getUsage({ claude: cfg.claude, codex: cfg.codex });
+  last = await getUsage({ claude: cfg.claude, codex: cfg.codex, antigravity: cfg.antigravity });
   send('usage', last);
 }
 
@@ -106,7 +107,8 @@ function applySettings(next) {
   if (prev.scale !== cfg.scale || prev.offset !== cfg.offset) { dock(); win.webContents.setZoomFactor(cfg.scale); }
   if (prev.scale !== cfg.scale && lastArt) send('media', { artOnly: true, ...sizedArt(lastArt) }); // re-fit covers to the new size
   send('settings', cfg);
-  if (prev.claude !== cfg.claude || prev.codex !== cfg.codex) { lastActivity = ''; activity(); refresh(); }
+  if (prev.claude !== cfg.claude || prev.codex !== cfg.codex || prev.antigravity !== cfg.antigravity) { lastActivity = ''; activity(); refresh(); }
+  if (prev.antigravity !== cfg.antigravity) pollAntigravity();
   if (prev.music !== cfg.music) cfg.music ? startMedia() : stopMedia();
   return cfg;
 }
@@ -170,19 +172,34 @@ let lastActivity = '', wasWorking = null; // session -> working, as of the last 
 function activity() {
   let f = {};
   try { f = JSON.parse(fs.readFileSync(ACTIVITY, 'utf8')); } catch {}
+  if (agSession) f.antigravity = { ide: agSession }; // Antigravity has no hooks: its state comes from pollAntigravity
   let latest = null, busy = null;
   const now = new Map();
-  for (const ai of ['claude', 'codex'].filter((x) => cfg[x])) for (const [sid, s] of Object.entries(f[ai] || {})) {
+  for (const ai of ['claude', 'codex', 'antigravity'].filter((x) => cfg[x])) for (const [sid, s] of Object.entries(f[ai] || {})) {
     now.set(ai + ':' + sid, s.working);
     // Was working at the last read, now stopped: tell the page it's done (toast + sound).
     if (wasWorking?.get(ai + ':' + sid) && !s.working) send('done', { ai, project: s.project || '', ranMs: s.at - (s.since ?? s.at) });
-    if (!latest || s.at > latest.at) latest = { ai, at: s.at };
+    if (s.at && (!latest || s.at > latest.at)) latest = { ai, at: s.at }; // at 0: never seen working
     if (s.working && Date.now() - s.at < STALE_MS && (!busy || s.at > busy.at)) busy = { ai, at: s.at };
   }
   wasWorking = now;
-  const a = { ai: (busy || latest)?.ai || (cfg.claude ? 'claude' : 'codex'), working: !!busy };
+  const a = { ai: (busy || latest)?.ai || (cfg.claude ? 'claude' : cfg.codex ? 'codex' : 'antigravity'), working: !!busy };
   const key = JSON.stringify(a);
   if (key !== lastActivity) { lastActivity = key; send('activity', a); }
+}
+
+// ---- Antigravity: no hooks, so ask the IDE whether its agent is running. Every 3s while it answers, 30s while it's closed. ----
+let agSession = null, agTimer = 0, agGen = 0;
+async function pollAntigravity() {
+  const gen = ++agGen; // a newer call (Settings switched it) replaces this loop
+  clearTimeout(agTimer);
+  if (!cfg.antigravity) { agSession = null; activity(); return; }
+  let wait = 3000;
+  try { agSession = antigravity.nextSession(agSession, await antigravity.running(), Date.now()); }
+  catch (e) { if (e.closed) { agSession = null; wait = 30_000; } } // any other error: keep the last state, try again soon
+  if (gen !== agGen) return;
+  activity();
+  agTimer = setTimeout(pollAntigravity, wait);
 }
 
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
@@ -241,6 +258,7 @@ app.whenReady().then(() => {
   setInterval(checkForUpdate, 6 * 3600_000);
   setInterval(refresh, POLL_MS);
   setInterval(activity, 10_000); // expire stale "working" sessions
+  pollAntigravity();
 
   // statusline.js rewrites the feed after every Claude Code reply; activity.js rewrites activity on every hook.
   let t, rt;
