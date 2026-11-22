@@ -103,11 +103,34 @@ function printQuota(summary, status) {
   if (plan) log(`    prompt credits: ${plan.availablePromptCredits ?? '?'} of ${plan.planInfo?.monthlyPromptCredits ?? '?'}`);
   if (!groups.length && !models.length) log('    (no quota fields where expected: the raw answers are in the report)');
 }
+// Antigravity 2.x writes ~/.gemini/antigravity/daemon/hub_<port>.json when its language server starts:
+// the ports and the token its own windows use to reach it. Newest first; old ones are left over from past runs.
+const findKey = (o, re) => { if (!o || typeof o !== 'object') return undefined;
+  for (const [k, v] of Object.entries(o)) { if (re.test(k) && (typeof v === 'string' || typeof v === 'number')) return v; const r = findKey(v, re); if (r !== undefined) return r; } };
+function daemonFiles() {
+  const dir = path.join(home, '.gemini', 'antigravity', 'daemon');
+  const out = [];
+  try {
+    for (const f of fs.readdirSync(dir)) {
+      if (!/\.json$/i.test(f)) continue;
+      const full = path.join(dir, f);
+      try { out.push({ file: f, mtime: fs.statSync(full).mtimeMs, j: JSON.parse(fs.readFileSync(full, 'utf8')) }); } catch {}
+    }
+  } catch {}
+  return out.sort((a, b) => b.mtime - a.mtime);
+}
+let live = null; // { proto, port, token } once a quota call worked
 async function quota() {
   log('\n1) Antigravity language server');
   let targets;
   if (arg('--port')) targets = [{ pid: 0, token: arg('--token'), ports: [Number(arg('--port'))] }];
   else {
+    const hubs = daemonFiles();
+    report.daemonFiles = hubs.slice(0, 5).map((h) => ({ file: h.file, modified: new Date(h.mtime).toISOString(), keys: Object.keys(h.j) }));
+    log(`  daemon files: ${hubs.length}${hubs.length ? ' (trying the newest 3)' : ''}`);
+    const fromHubs = hubs.slice(0, 3).map((h) => ({ pid: h.file, token: String(findKey(h.j, /csrf/i) ?? '') || undefined,
+      ports: [findKey(h.j, /^httpsPort$/i), findKey(h.j, /^httpPort$/i)].map(Number).filter(Boolean) }));
+    for (const h of fromHubs) log(`    ${h.pid}: ports ${h.ports.join(', ') || '-'}  token: ${h.token ? 'yes' : 'no'}`);
     const servers = findServers();
     log(`  found ${servers.length} language server process(es)` + (servers.length ? ':' : ' (is the Antigravity IDE open?)'));
     for (const s of servers) {
@@ -115,7 +138,7 @@ async function quota() {
       log(`      started with (secrets hidden): ${s.flags.slice(0, 1200) || '(no arguments)'}`);
     }
     // No token on the command line: still try, some versions accept requests without one.
-    targets = servers.map((s) => ({ ...s, ports: [...new Set([...listeningPorts(s.pid), ...(s.extPort ? [s.extPort] : [])])] }));
+    targets = [...fromHubs, ...servers.map((s) => ({ ...s, ports: [...new Set([...listeningPorts(s.pid), ...(s.extPort ? [s.extPort] : [])])] }))];
   }
   for (const t of targets) {
     log(`  pid ${t.pid}: listening on ${t.ports.join(', ') || 'nothing found'}`);
@@ -129,6 +152,9 @@ async function quota() {
       report.quota = { port, proto, RetrieveUserQuotaSummary: scrub(sum), GetUserStatus: scrub(st) };
       log(`  RetrieveUserQuotaSummary: HTTP ${sum.status ?? sum.error}   GetUserStatus: HTTP ${st.status ?? st.error}`);
       printQuota(sum.json, st.json);
+      live = { proto, port, token: t.token };
+      const s = await agentStatus();
+      log(`  agent status now: ${s.text}`);
       return;
     }
   }
@@ -167,6 +193,46 @@ function findHints(ports) {
   if (!found.length) log('    (nothing found)');
 }
 
+// ---- Agent run status, straight from the language server. Only enum values (like ..._RUNNING) are kept: no titles or text. ----
+async function agentStatus() {
+  const r = await rpc(live.proto, live.port, live.token, 'GetAllCascadeTrajectories', META);
+  if (r.status !== 200) return { text: `GetAllCascadeTrajectories: HTTP ${r.status ?? r.error} ${scrub(r.text || '').slice(0, 80)}`, counts: {} };
+  const counts = {};
+  const walk = (o, k = '') => {
+    if (Array.isArray(o)) return o.forEach((x) => walk(x, k));
+    if (o && typeof o === 'object') return Object.entries(o).forEach(([kk, v]) => walk(v, kk));
+    if (typeof o === 'string' && /status|state/i.test(k) && /^[A-Z][A-Z0-9_]{2,}$/.test(o)) counts[`${k}=${o}`] = (counts[`${k}=${o}`] || 0) + 1;
+  };
+  walk(r.json);
+  report.statusShape ??= Object.keys(r.json || {});
+  const list = Object.entries(counts).map(([k, n]) => `${k} x${n}`).join('  ');
+  return { text: list || `(no status fields; top-level keys: ${Object.keys(r.json || {}).join(', ') || 'none'})`, counts };
+}
+function watchStatus() {
+  if (!live) return;
+  log('  Asking Antigravity for the agent status every 2s; changes show as STATUS lines.');
+  let last = '';
+  report.status = [];
+  setInterval(async () => {
+    const s = await agentStatus();
+    const key = JSON.stringify(s.counts);
+    if (key === last) return;
+    last = key;
+    report.status.push({ t: Date.now() - t0, status: s.counts, text: Object.keys(s.counts).length ? undefined : s.text });
+    log(`    ${since().padStart(7)}  STATUS ${s.text}`);
+  }, 2000);
+}
+// Which settings app_storage.json holds (it's rewritten often while Antigravity runs). Names only, no values.
+function appStorageKeys() {
+  const f = path.join(appdata, 'Antigravity', 'app_storage.json');
+  try {
+    const names = [];
+    const walk = (o, p, d) => { if (!o || typeof o !== 'object' || Array.isArray(o) || d > 2) return; for (const k of Object.keys(o)) { names.push(shape(p + k)); walk(o[k], p + k + '.', d + 1); } };
+    walk(JSON.parse(fs.readFileSync(f, 'utf8')), '', 0);
+    return [...new Set(names)].slice(0, 120);
+  } catch (e) { return [`(can't read: ${e.code || e.message})`]; }
+}
+
 // ---- 3. Watch which files change while the agent works ----
 const home = os.homedir(), appdata = process.env.APPDATA || path.join(home, 'AppData', 'Roaming');
 const WATCH = [path.join(home, '.gemini'), path.join(home, '.antigravity'), path.join(appdata, 'Antigravity')];
@@ -185,7 +251,7 @@ function watchFiles() {
         let size = null; try { size = fs.statSync(full).size; } catch {}
         const rel = path.join(path.basename(dir), String(f));
         report.files.events.push({ t: Date.now() - t0, type, path: shape(rel), size });
-        if (!/\.log$|[\\/]logs?[\\/]|Cache|GPUCache|blob_storage/i.test(rel)) log(`    ${since().padStart(7)}  ${type.padEnd(6)} ${shape(rel)}`);
+        if (!/\.log$|\.tmp$|[\\/]logs?[\\/]|Cache|GPUCache|blob_storage/i.test(rel)) log(`    ${since().padStart(7)}  ${type.padEnd(6)} ${shape(rel)}`);
       });
       report.files.watched.push(dir);
       log(`    ${dir}`);
@@ -227,7 +293,10 @@ function finish() {
 (async () => {
   log('Antigravity check for SneakPeek (read-only).');
   await quota();
+  report.appStorageKeys = appStorageKeys();
+  log(`\n  app_storage.json holds: ${report.appStorageKeys.slice(0, 40).join(', ')}`);
   watchFiles();
+  watchStatus();
   log(`
 Now, in the Antigravity IDE:
   1. Press Enter here, then right away send the agent a prompt that takes a minute or so
