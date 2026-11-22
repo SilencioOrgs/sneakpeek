@@ -99,7 +99,8 @@ async function guarded(name, fn, gapMs) {
       saveCache();
     } catch (e) {
       if (e.auth) { c.error = e.message; c.next = 0; return { ok: false, error: e.message }; }
-      if (e.status === 429) {
+      if (e.closed) { c.stale = e.message; c.error = e.message; c.next = 0; } // Antigravity isn't open: keep its last numbers
+      else if (e.status === 429) {
         const min = Math.min(30, 5 * 2 ** c.fails++);
         c.stale = 'Rate-limited'; c.next = Date.now() + min * 60000;
         c.error = `Rate-limited by the server - retrying in ${min} min`;
@@ -140,20 +141,25 @@ async function getClaude() {
 // Instant startup: whatever was saved last time, without touching the network.
 function cachedUsage() {
   const saved = (c) => (c?.data ? { ok: true, ...c.data, at: c.at } : null);
-  const feed = claudeFeed(), cc = saved(cache.claude), cx = saved(cache.codex);
+  const feed = claudeFeed(), cc = saved(cache.claude), cx = saved(cache.codex), ag = saved(cache.antigravity);
   const claude = feed && (!cc || feed.at > cc.at) ? feed : cc;
-  if (!claude && !cx) return null;
+  if (!claude && !cx && !ag) return null;
   const wait = { ok: false, error: 'Checking…' };
-  return { claude: claude || wait, codex: cx || wait, at: Math.max(claude?.at || 0, cx?.at || 0) };
+  return { claude: claude || wait, codex: cx || wait, antigravity: ag || wait, at: Math.max(claude?.at || 0, cx?.at || 0, ag?.at || 0) };
 }
 
 // on = which tools are switched on in Settings; switched-off ones aren't checked at all.
-async function getUsage(on = { claude: true, codex: true }) {
+async function getUsage(on = { claude: true, codex: true, antigravity: true }) {
   const off = { ok: false, off: true, error: 'Turned off in Settings' };
-  const [c, x] = await Promise.all([on.claude ? getClaude() : off, on.codex ? guarded('codex', codex, 30000) : off]);
-  return { claude: c, codex: x, at: Date.now() };
+  const [c, x, a] = await Promise.all([on.claude ? getClaude() : off, on.codex ? guarded('codex', codex, 30000) : off,
+    (on.antigravity ?? true) ? guarded('antigravity', () => agQuota(), 30000) : off]);
+  return { claude: c, codex: x, antigravity: a, at: Date.now() };
 }
 
-module.exports = { getUsage, cachedUsage };
+// Antigravity's quota comes from the IDE on this computer (antigravity.js); swappable for tests.
+let agQuota = (...a) => require('./antigravity').quota(...a);
+function _setAntigravity(fn) { agQuota = fn; if (cache.antigravity) cache.antigravity.next = 0; }
+
+module.exports = { getUsage, cachedUsage, _setAntigravity };
 
 if (require.main === module) getUsage().then((u) => console.log(JSON.stringify(u, null, 2)));

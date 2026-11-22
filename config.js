@@ -5,6 +5,7 @@ const FILE = path.join(os.homedir(), '.sneakpeek', 'settings.json');
 const DEFAULTS = {
   claude: true,          // show Claude Code (usage, logo, alerts)
   codex: true,           // show ChatGPT / Codex
+  antigravity: true,     // show Antigravity (usage, logo, alerts)
   music: true,           // now playing from any media app (Spotify, browsers...)
   songNotes: true,       // ...with a small note when the song changes
   sounds: true,          // master switch for every chime
@@ -21,7 +22,7 @@ function clean(s) {
   const d = DEFAULTS, bool = (k) => (typeof s[k] === 'boolean' ? s[k] : d[k]);
   const levels = Array.isArray(s.alertLevels) ? [...new Set(s.alertLevels.filter((n) => Number.isInteger(n) && n > 0 && n < 100))].sort((a, b) => a - b) : d.alertLevels;
   return {
-    claude: bool('claude'), codex: bool('codex'), music: bool('music'), songNotes: bool('songNotes'), sounds: bool('sounds'), doneNotes: bool('doneNotes'), alerts: bool('alerts'),
+    claude: bool('claude'), codex: bool('codex'), antigravity: bool('antigravity'), music: bool('music'), songNotes: bool('songNotes'), sounds: bool('sounds'), doneNotes: bool('doneNotes'), alerts: bool('alerts'),
     doneMinSec: num(s.doneMinSec, 0, 600, d.doneMinSec),
     alertLevels: levels.length ? levels.slice(0, 3) : d.alertLevels,
     scale: num(s.scale, 0.5, 1.25, d.scale),
