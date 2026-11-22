@@ -57,6 +57,10 @@
     font: inherit; text-align: right; caret-color: var(--accent); }
   .num:hover { border-color: var(--knob-off); }
   .levels { display: flex; gap: 6px; align-items: center; color: var(--muted); }
+  /* Glow colour: "Match the AI" or one colour from the system picker */
+  .pick-mode { padding: 6px 8px; border-radius: 8px; border: 1px solid var(--edge); background: var(--field); color: var(--text); font: inherit; cursor: pointer; }
+  .pick-mode:hover, .pick:hover { border-color: var(--knob-off); }
+  .pick { width: 34px; height: 30px; padding: 2px; border-radius: 8px; border: 1px solid var(--edge); background: var(--field); cursor: pointer; }
   .slider { display: flex; align-items: center; gap: 10px; width: 190px; flex: none; }
   .slider output { width: 52px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
   input[type=range] { flex: 1; accent-color: var(--text); cursor: pointer; }
@@ -116,6 +120,10 @@
     <div class="levels"><input class="num" type="number" min="1" max="99" step="1" id="lvl1" aria-label="First alert level, percent">%<input class="num" type="number" min="1" max="99" step="1" id="lvl2" aria-label="Second alert level, percent">%</div>
     <label class="sw"><input type="checkbox" data-set="alerts"></label></div>
   <p class="note" id="levels-msg" role="status" hidden></p>
+  <div class="row"><div class="txt"><div class="name">Glow while waiting</div><div class="desc">Lights up the tab while an AI waits for your answer</div></div>
+    <div class="levels"><select class="pick-mode" id="glowMode" aria-label="Glow colour"><option value="ai">Match the AI</option><option value="one">One colour</option></select>
+    <input class="pick" type="color" id="glowColor" value="#ffffff" aria-label="Glow colour" hidden></div>
+    <label class="sw"><input type="checkbox" data-set="glow"></label></div>
 
   <h2>Widget</h2>
   <div class="row"><div class="txt"><div class="name">Size</div></div><div class="slider"><input type="range" min="50" max="125" step="5" id="scale" aria-label="Widget size"><output id="scale-out"></output></div></div>
@@ -176,6 +184,9 @@ function render(s) {
   if (i['claude.feed.blocked']) $('[data-int="claude.feed"]').disabled = true;
 
   $('#doneMinSec').value = c.doneMinSec;
+  $('#glowMode').value = c.glowColor === 'ai' ? 'ai' : 'one';
+  $('#glowColor').hidden = c.glowColor === 'ai';
+  if (c.glowColor !== 'ai') $('#glowColor').value = c.glowColor;
   [$('#lvl1').value, $('#lvl2').value] = [c.alertLevels[0] ?? '', c.alertLevels[1] ?? ''];
   $('#scale').value = Math.round(c.scale * 100); $('#scale-out').value = Math.round(c.scale * 100) + '%';
   $('#offset').value = c.offset; $('#offset-out').value = c.offset < 15 ? 'Top' : c.offset > 85 ? 'Bottom' : c.offset === 50 ? 'Middle' : c.offset + '%';
@@ -225,6 +236,9 @@ function levels() {
   if (!ok.length) return render(snap); // keep the current levels rather than clearing them
   set({ alertLevels: ok });
 }
+// Glow colour: switching to "One colour" starts from the picker's colour (white the first time).
+$('#glowMode').addEventListener('change', (e) => set({ glowColor: e.target.value === 'ai' ? 'ai' : $('#glowColor').value }));
+$('#glowColor').addEventListener('change', (e) => set({ glowColor: e.target.value }));
 $('#lvl1').addEventListener('change', levels); $('#lvl2').addEventListener('change', levels);
 
 // Sliders apply live while dragging (lightly throttled); SneakPeek saves the final value.
