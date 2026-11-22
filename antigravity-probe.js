@@ -88,7 +88,7 @@ const META = { metadata: { ideName: 'antigravity', extensionName: 'antigravity',
 async function connect(port, token) {
   for (const proto of ['https', 'http']) {
     const r = await rpc(proto, port, token, 'GetUnleashData', { wrapper_data: {} });
-    report.ports.push({ port, proto, status: r.status, error: r.error });
+    report.ports.push({ port, proto, status: r.status, error: r.error && r.error.split('\n')[0].slice(0, 80), body: scrub(r.text || '').slice(0, 120) || undefined });
     if (r.status === 200) return proto;
   }
   return null;
@@ -121,7 +121,7 @@ async function quota() {
     log(`  pid ${t.pid}: listening on ${t.ports.join(', ') || 'nothing found'}`);
     for (const port of t.ports) {
       const proto = await connect(port, t.token);
-      const tries = report.ports.filter((p) => p.port === port).map((p) => `${p.proto} ${p.status ?? p.error}`).join(', ');
+      const tries = report.ports.filter((p) => p.port === port).map((p) => `${p.proto} ${p.status ?? p.error}${p.body ? ` "${p.body.replace(/\s+/g, ' ')}"` : ''}`).join(', ');
       log(`    port ${port}: ${tries}`);
       if (!proto) continue;
       log(`  connected: ${proto}://127.0.0.1:${port}`);
@@ -133,6 +133,38 @@ async function quota() {
     }
   }
   note('Could not get quota from any language server port.');
+  findHints(targets.flatMap((t) => t.ports));
+}
+
+// Where could this version keep its token, its ports or a cached quota? Lists file and setting names only, never values.
+function findHints(ports) {
+  log('\n1b) Looking for files that hold the token, the ports or cached quota (names only, no values):');
+  const local = process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
+  const roots = [[path.join(home, '.gemini'), 5], [path.join(appdata, 'Antigravity'), 4], [path.join(local, 'Antigravity'), 3], [path.join(home, '.antigravity'), 4]];
+  const SKIP = /^(Cache|Code Cache|GPUCache|DawnCache|DawnGraphiteCache|DawnWebGPUCache|blob_storage|CachedData|CachedExtensionVSIXs|Crashpad|logs|node_modules|extensions|History|workspaceStorage)$/i;
+  const KEY = /[\w.\-]*(csrf|bridge_?token|hostbridge|https?_?port|server_?port|quota|remaining_?fraction|userstatus|user_status|prompt_?credits)[\w.\-]*/gi;
+  const portRe = ports.length ? new RegExp(`\\b(${ports.join('|')})\\b`) : null;
+  const found = [];
+  const walk = (dir, depth) => {
+    let items = [];
+    try { items = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const it of items) {
+      const full = path.join(dir, it.name);
+      if (it.isDirectory()) { if (depth > 0 && !SKIP.test(it.name)) walk(full, depth - 1); continue; }
+      let st; try { st = fs.statSync(full); } catch { continue; }
+      if (st.size === 0 || st.size > 150 * 1024 * 1024) continue;
+      let text; try { text = fs.readFileSync(full).toString('latin1'); } catch (e) { continue; }
+      const keys = [...new Set((text.match(KEY) || []).map((k) => k.slice(0, 60)))].slice(0, 15);
+      const hasPort = portRe ? portRe.test(text) : false;
+      if (!keys.length && !hasPort) continue;
+      found.push({ path: full.split(home).join('~'), size: st.size, modified: st.mtime.toISOString(), hasPort, keys });
+    }
+  };
+  for (const [dir, depth] of roots) if (fs.existsSync(dir)) walk(dir, depth);
+  found.sort((a, b) => (b.hasPort - a.hasPort) || b.modified.localeCompare(a.modified));
+  report.hints = found.slice(0, 60);
+  for (const f of report.hints.slice(0, 25)) log(`    ${f.hasPort ? 'PORT ' : '     '}${f.path}  (${Math.round(f.size / 1024)} KB, ${f.modified.slice(0, 16)})  ${f.keys.join(' ')}`);
+  if (!found.length) log('    (nothing found)');
 }
 
 // ---- 3. Watch which files change while the agent works ----
