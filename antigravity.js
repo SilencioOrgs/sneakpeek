@@ -75,29 +75,35 @@ function rpc(port, token, method) {
         try { resolve(s ? JSON.parse(s) : {}); } catch { reject(Object.assign(new Error('Unexpected answer from Antigravity'), { status: res.statusCode })); }
       });
     });
-    req.on('timeout', () => req.destroy(new Error('timeout')));
+    req.on('timeout', () => req.destroy(Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' })));
     req.on('error', reject);
     req.end(BODY);
   });
 }
 
 const closedError = () => Object.assign(new Error("Antigravity isn't open"), { closed: true });
-// A 401/403 means the token changed (Antigravity restarted and reused the port): look again, like a dead port.
-const lookAgain = (e) => !e.status || e.status === 401 || e.status === 403;
+// Gone for sure: nothing listens there any more, or the token changed (Antigravity restarted, maybe on the same port).
+const gone = (e) => e.code === 'ECONNREFUSED' || e.code === 'ECONNRESET' || e.status === 401 || e.status === 403;
 
 function createClient({ readDaemons: read = readDaemons, rpc: send = rpc } = {}) {
-  let conn = null; // the server that answered last
+  let conn = null, stalls = 0; // the server that answered last, and how many times in a row it hasn't since
   async function call(method) {
     let dead = null;
     if (conn) {
-      try { return await send(conn.port, conn.token, method); }
-      catch (e) { if (!lookAgain(e)) throw e; dead = conn.port; conn = null; }
+      try { const r = await send(conn.port, conn.token, method); stalls = 0; return r; }
+      catch (e) {
+        if (e.status && !gone(e)) throw e; // it answered, with an error: still the right server
+        // Slow (it's busiest while the agent runs): keep it. Only three stalls in a row mean look again.
+        if (!gone(e) && ++stalls < 3) throw e;
+        dead = conn; conn = null; stalls = 0;
+      }
     }
-    for (const d of pickDaemons(read()).filter((x) => x.port !== dead)) {
+    let answered = null; // an HTTP error from a port during the search: only reported if nothing better answers
+    for (const d of pickDaemons(read()).filter((x) => !(dead && x.port === dead.port && x.token === dead.token))) {
       try { const r = await send(d.port, d.token, method); conn = d; return r; }
-      catch (e) { if (!lookAgain(e)) { conn = d; throw e; } }
+      catch (e) { if (e.status && !gone(e)) answered ??= e; }
     }
-    throw closedError();
+    throw answered || closedError();
   }
   return {
     quota: async () => parseQuota(await call('RetrieveUserQuotaSummary')),
